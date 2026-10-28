@@ -1,0 +1,6 @@
+dist/
+logs/
+certs/
+config.yaml
+*.exe
+.DS_Store

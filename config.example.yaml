@@ -1,0 +1,58 @@
+# video-server 配置文件示例
+# 复制为 config.yaml，放到 video-server.exe 同目录下再修改。
+# Windows 路径请用单引号包裹（双引号里的反斜杠会被当成转义符），也可以直接用正斜杠，如 D:/Movies
+
+server:
+  # 监听地址。例如 ":8443" 或 ":9000"（建议避开 80/443/8080 等被宽带封锁的端口）
+  # 路由器端口转发：外网端口 -> 这台电脑的局域网 IP:8443
+  listen: ":8443"
+  tls:
+    # 是否启用 HTTPS。纯 IP 访问时设为 false；配置了域名和证书后再改为 true
+    enabled: false
+    # 启用 HTTPS 时的证书路径（腾讯云 SSL 证书控制台下载“Nginx”格式，解压后有 xxx_bundle.crt 和 xxx.key）
+    # 相对路径基于本配置文件所在目录
+    cert_file: 'certs\video.example.com_bundle.crt'
+    key_file: 'certs\video.example.com.key'
+
+# 登录账号（固定一个账号即可），密码至少 8 位，建议使用随机强密码
+auth:
+  username: "admin"
+  password: "change-me-to-a-strong-password"
+
+# 登录失败封禁：同一 IP 在 failure_window 内失败 max_failures 次，封禁 ban_duration
+security:
+  max_failures: 5
+  failure_window: 10m
+  ban_duration: 30m
+
+# 视频目录，可配置多个。name 为在播放器里看到的文件夹名
+dirs:
+  - name: "电影"
+    path: 'D:\Movies'
+  - name: "剧集"
+    path: 'E:\TV Shows'
+
+filter:
+  # 视频扩展名（不区分大小写）
+  video_exts: [".mkv", ".mp4", ".m4v", ".avi", ".mov", ".wmv", ".flv", ".f4v", ".webm",
+               ".ts", ".m2ts", ".mts", ".mpg", ".mpeg", ".vob", ".rmvb", ".rm", ".3gp", ".iso"]
+  # 字幕扩展名
+  subtitle_exts: [".srt", ".ass", ".ssa", ".sup", ".vtt", ".sub", ".idx"]
+  # 其它需要暴露的扩展名，例如想让播放器读取本地刮削结果可加上 [".nfo", ".jpg", ".png"]
+  extra_exts: []
+  # 隐藏的文件/目录名，支持通配符 * ?，不区分大小写
+  exclude_names: [".*", "$*", "System Volume Information", "@eaDir", "#recycle", "#snapshot"]
+  # 隐藏不包含任何视频的目录（会递归检查子目录）
+  hide_empty_dirs: true
+  # 上述检查结果的缓存时间，新增视频后最多这么久才会让原本隐藏的目录出现
+  empty_dir_cache_ttl: 2m
+  # 是否跟随符号链接/目录联接(junction)。开启后链接可能指向配置目录之外，请确认安全后再开
+  follow_symlinks: false
+
+log:
+  # 日志文件，相对路径基于本配置文件所在目录；留空则只输出到控制台
+  file: 'logs\video-server.log'
+  # debug / info / warn / error
+  level: "info"
+  # 是否记录每个请求（播放时会产生较多 Range 请求日志）
+  access_log: true
