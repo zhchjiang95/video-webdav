@@ -1,6 +1,7 @@
-dist/
+/dist/
 logs/
 certs/
 config.yaml
 *.exe
 .DS_Store
+web/node_modules/

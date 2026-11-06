@@ -57,7 +57,7 @@ func New(cfg *config.Config, logger *slog.Logger) *FS {
 		excludes:    cfg.Filter.ExcludeNames,
 		hideEmpty:   cfg.Filter.HideEmptyDirs,
 		follow:      cfg.Filter.FollowSymlinks,
-		cache:       newBoolCache(cfg.Filter.EmptyDirCacheTTL),
+		cache:       newBoolCache(cfg.Filter.EmptyDirCacheTTL.Duration()),
 		startTime:   time.Now(),
 		logger:      logger,
 	}

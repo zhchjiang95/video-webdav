@@ -2,6 +2,7 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -12,14 +13,65 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Duration 包装 time.Duration，兼容在 JSON/YAML 中以友好字符串（如 "10m", "30m"）读写。
+type Duration time.Duration
+
+func (d Duration) Duration() time.Duration {
+	return time.Duration(d)
+}
+
+func (d Duration) MarshalJSON() ([]byte, error) {
+	return json.Marshal(time.Duration(d).String())
+}
+
+func (d *Duration) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err == nil {
+		td, err := time.ParseDuration(s)
+		if err != nil {
+			return err
+		}
+		*d = Duration(td)
+		return nil
+	}
+	var num float64
+	if err := json.Unmarshal(b, &num); err == nil {
+		*d = Duration(time.Duration(num))
+		return nil
+	}
+	return errors.New("无效的时长格式")
+}
+
+func (d Duration) MarshalYAML() (any, error) {
+	return time.Duration(d).String(), nil
+}
+
+func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
+	var s string
+	if err := node.Decode(&s); err == nil {
+		td, err := time.ParseDuration(s)
+		if err != nil {
+			return err
+		}
+		*d = Duration(td)
+		return nil
+	}
+	var num int64
+	if err := node.Decode(&num); err == nil {
+		*d = Duration(time.Duration(num))
+		return nil
+	}
+	return errors.New("无法解析时长格式")
+}
+
 // Config 是服务的完整配置。
 type Config struct {
-	Server   ServerConfig   `yaml:"server"`
-	Auth     AuthConfig     `yaml:"auth"`
-	Security SecurityConfig `yaml:"security"`
-	Dirs     []DirConfig    `yaml:"dirs"`
-	Filter   FilterConfig   `yaml:"filter"`
-	Log      LogConfig      `yaml:"log"`
+	Server   ServerConfig   `yaml:"server" json:"server"`
+	Auth     AuthConfig     `yaml:"auth" json:"auth"`
+	Security SecurityConfig `yaml:"security" json:"security"`
+	Dirs     []DirConfig    `yaml:"dirs" json:"dirs"`
+	Filter   FilterConfig   `yaml:"filter" json:"filter"`
+	Log      LogConfig      `yaml:"log" json:"log"`
 
 	// baseDir 为配置文件所在目录，用于解析配置中的相对路径（不从 yaml 读取）
 	baseDir string
@@ -28,63 +80,63 @@ type Config struct {
 // ServerConfig 监听与 TLS 配置。
 type ServerConfig struct {
 	// Listen 监听地址，例如 ":8443"
-	Listen string    `yaml:"listen"`
-	TLS    TLSConfig `yaml:"tls"`
+	Listen string    `yaml:"listen" json:"listen"`
+	TLS    TLSConfig `yaml:"tls" json:"tls"`
 }
 
 // TLSConfig HTTPS 证书配置。
 type TLSConfig struct {
-	Enabled  bool   `yaml:"enabled"`
-	CertFile string `yaml:"cert_file"`
-	KeyFile  string `yaml:"key_file"`
+	Enabled  bool   `yaml:"enabled" json:"enabled"`
+	CertFile string `yaml:"cert_file" json:"cert_file"`
+	KeyFile  string `yaml:"key_file" json:"key_file"`
 }
 
 // AuthConfig 固定的用户名密码。
 type AuthConfig struct {
-	Username string `yaml:"username"`
-	Password string `yaml:"password"`
+	Username string `yaml:"username" json:"username"`
+	Password string `yaml:"password" json:"password"`
 }
 
 // SecurityConfig 登录失败封禁策略。
 type SecurityConfig struct {
 	// MaxFailures 在 FailureWindow 时间窗口内允许的最大失败次数，<=0 表示不封禁
-	MaxFailures   int           `yaml:"max_failures"`
-	FailureWindow time.Duration `yaml:"failure_window"`
-	BanDuration   time.Duration `yaml:"ban_duration"`
+	MaxFailures   int      `yaml:"max_failures" json:"max_failures"`
+	FailureWindow Duration `yaml:"failure_window" json:"failure_window"`
+	BanDuration   Duration `yaml:"ban_duration" json:"ban_duration"`
 }
 
 // DirConfig 一个对外暴露的视频目录。
 type DirConfig struct {
 	// Name 在 WebDAV 根目录下显示的文件夹名
-	Name string `yaml:"name"`
+	Name string `yaml:"name" json:"name"`
 	// Path 本地磁盘上的绝对路径
-	Path string `yaml:"path"`
+	Path string `yaml:"path" json:"path"`
 }
 
 // FilterConfig 文件过滤规则。
 type FilterConfig struct {
-	VideoExts    []string `yaml:"video_exts"`
-	SubtitleExts []string `yaml:"subtitle_exts"`
+	VideoExts    []string `yaml:"video_exts" json:"video_exts"`
+	SubtitleExts []string `yaml:"subtitle_exts" json:"subtitle_exts"`
 	// ExtraExts 额外允许暴露的扩展名（如 .nfo、.jpg），默认为空
-	ExtraExts []string `yaml:"extra_exts"`
+	ExtraExts []string `yaml:"extra_exts" json:"extra_exts"`
 	// ExcludeNames 需要隐藏的文件/目录名（支持通配符，不区分大小写）
-	ExcludeNames []string `yaml:"exclude_names"`
+	ExcludeNames []string `yaml:"exclude_names" json:"exclude_names"`
 	// HideEmptyDirs 隐藏不包含任何视频文件的目录
-	HideEmptyDirs bool `yaml:"hide_empty_dirs"`
+	HideEmptyDirs bool `yaml:"hide_empty_dirs" json:"hide_empty_dirs"`
 	// EmptyDirCacheTTL “目录是否包含视频”判断结果的缓存时间
-	EmptyDirCacheTTL time.Duration `yaml:"empty_dir_cache_ttl"`
+	EmptyDirCacheTTL Duration `yaml:"empty_dir_cache_ttl" json:"empty_dir_cache_ttl"`
 	// FollowSymlinks 是否跟随符号链接/目录联接（junction），默认关闭以防越权访问
-	FollowSymlinks bool `yaml:"follow_symlinks"`
+	FollowSymlinks bool `yaml:"follow_symlinks" json:"follow_symlinks"`
 }
 
 // LogConfig 日志配置。
 type LogConfig struct {
 	// File 日志文件路径，相对路径基于配置文件所在目录，留空则只输出到控制台
-	File string `yaml:"file"`
+	File string `yaml:"file" json:"file"`
 	// Level 日志级别：debug / info / warn / error
-	Level string `yaml:"level"`
+	Level string `yaml:"level" json:"level"`
 	// AccessLog 是否记录每个请求
-	AccessLog bool `yaml:"access_log"`
+	AccessLog bool `yaml:"access_log" json:"access_log"`
 }
 
 // Default 返回带默认值的配置。
@@ -93,8 +145,8 @@ func Default() *Config {
 		Server: ServerConfig{Listen: ":8443"},
 		Security: SecurityConfig{
 			MaxFailures:   5,
-			FailureWindow: 10 * time.Minute,
-			BanDuration:   30 * time.Minute,
+			FailureWindow: Duration(10 * time.Minute),
+			BanDuration:   Duration(30 * time.Minute),
 		},
 		Filter: FilterConfig{
 			VideoExts: []string{
@@ -106,7 +158,7 @@ func Default() *Config {
 				".*", "$*", "System Volume Information", "@eaDir", "#recycle", "#snapshot",
 			},
 			HideEmptyDirs:    true,
-			EmptyDirCacheTTL: 2 * time.Minute,
+			EmptyDirCacheTTL: Duration(2 * time.Minute),
 		},
 		Log: LogConfig{
 			File:      "logs/video-server.log",
@@ -134,10 +186,55 @@ func Load(path string) (*Config, error) {
 	}
 	cfg.baseDir = filepath.Dir(absPath)
 
-	if err := cfg.normalize(); err != nil {
+	if err := cfg.Normalize(); err != nil {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// BaseDir 返回配置文件所在的基准目录。
+func (c *Config) BaseDir() string {
+	return c.baseDir
+}
+
+// SetBaseDir 设置配置文件所在的基准目录。
+func (c *Config) SetBaseDir(dir string) {
+	c.baseDir = dir
+}
+
+// Save 将当前配置保存到指定的文件路径中（原子写入）。
+func (c *Config) Save(path string) error {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("解析配置文件保存路径失败: %w", err)
+	}
+
+	c.baseDir = filepath.Dir(absPath)
+	if err := c.Normalize(); err != nil {
+		return fmt.Errorf("配置校验不通过: %w", err)
+	}
+
+	data, err := yaml.Marshal(c)
+	if err != nil {
+		return fmt.Errorf("序列化配置失败: %w", err)
+	}
+
+	dir := filepath.Dir(absPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("创建配置目录失败: %w", err)
+	}
+
+	tmpFile := filepath.Join(dir, fmt.Sprintf(".config.tmp.%d", time.Now().UnixNano()))
+	if err := os.WriteFile(tmpFile, data, 0o600); err != nil {
+		return fmt.Errorf("写入临时配置文件失败: %w", err)
+	}
+
+	if err := os.Rename(tmpFile, absPath); err != nil {
+		_ = os.Remove(tmpFile)
+		return fmt.Errorf("保存配置文件失败: %w", err)
+	}
+
+	return nil
 }
 
 // ResolvePath 将相对路径解析为相对配置文件所在目录的绝对路径。
@@ -148,8 +245,8 @@ func (c *Config) ResolvePath(p string) string {
 	return filepath.Join(c.baseDir, p)
 }
 
-// normalize 规范化并校验配置项。
-func (c *Config) normalize() error {
+// Normalize 规范化并校验配置项。
+func (c *Config) Normalize() error {
 	var errs []error
 
 	if strings.TrimSpace(c.Server.Listen) == "" {
@@ -193,7 +290,12 @@ func (c *Config) normalize() error {
 			errs = append(errs, fmt.Errorf("dirs[%d].name 包含非法字符: %q", i, d.Name))
 			continue
 		}
-		key := strings.ToLower(d.Name)
+		lower := strings.ToLower(d.Name)
+		if lower == "admin" || lower == "api" {
+			errs = append(errs, fmt.Errorf("dirs[%d].name 不能使用系统保留名称 %q", i, d.Name))
+			continue
+		}
+		key := lower
 		if seen[key] {
 			errs = append(errs, fmt.Errorf("dirs[%d].name 重复: %q", i, d.Name))
 			continue
@@ -226,14 +328,14 @@ func (c *Config) normalize() error {
 		c.Filter.ExcludeNames[i] = strings.ToLower(strings.TrimSpace(p))
 	}
 	if c.Filter.EmptyDirCacheTTL <= 0 {
-		c.Filter.EmptyDirCacheTTL = 2 * time.Minute
+		c.Filter.EmptyDirCacheTTL = Duration(2 * time.Minute)
 	}
 
 	if c.Security.FailureWindow <= 0 {
-		c.Security.FailureWindow = 10 * time.Minute
+		c.Security.FailureWindow = Duration(10 * time.Minute)
 	}
 	if c.Security.BanDuration <= 0 {
-		c.Security.BanDuration = 30 * time.Minute
+		c.Security.BanDuration = Duration(30 * time.Minute)
 	}
 
 	c.Log.File = c.ResolvePath(c.Log.File)

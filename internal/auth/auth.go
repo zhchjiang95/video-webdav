@@ -3,28 +3,42 @@ package auth
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"video-server/internal/config"
 )
 
+// BannedClient 包含被封禁客户端的信息。
+type BannedClient struct {
+	IP          string    `json:"ip"`
+	BannedUntil time.Time `json:"banned_until"`
+	DurationSec int       `json:"duration_sec"`
+}
+
 // Guard 认证守卫。
 type Guard struct {
 	userHash    [32]byte
 	passHash    [32]byte
+	rawUser     string
 	maxFailures int
 	window      time.Duration
 	ban         time.Duration
+	tokenSecret []byte
 	logger      *slog.Logger
 
-	mu      sync.Mutex
+	mu      sync.RWMutex
 	clients map[string]*clientState
 }
 
@@ -36,15 +50,103 @@ type clientState struct {
 
 // New 创建认证守卫。
 func New(a config.AuthConfig, s config.SecurityConfig, logger *slog.Logger) *Guard {
+	secret := make([]byte, 32)
+	_, _ = rand.Read(secret)
+
 	return &Guard{
 		userHash:    sha256.Sum256([]byte(a.Username)),
 		passHash:    sha256.Sum256([]byte(a.Password)),
+		rawUser:     a.Username,
 		maxFailures: s.MaxFailures,
-		window:      s.FailureWindow,
-		ban:         s.BanDuration,
+		window:      s.FailureWindow.Duration(),
+		ban:         s.BanDuration.Duration(),
+		tokenSecret: secret,
 		logger:      logger,
 		clients:     make(map[string]*clientState),
 	}
+}
+
+// Update 更新认证凭据与安全策略。
+func (g *Guard) Update(a config.AuthConfig, s config.SecurityConfig) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.userHash = sha256.Sum256([]byte(a.Username))
+	g.passHash = sha256.Sum256([]byte(a.Password))
+	g.rawUser = a.Username
+	g.maxFailures = s.MaxFailures
+	g.window = s.FailureWindow.Duration()
+	g.ban = s.BanDuration.Duration()
+}
+
+// CheckCredentials 检查用户名和密码是否正确。
+func (g *Guard) CheckCredentials(user, pass string) bool {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.check(user, pass)
+}
+
+// CreateAdminToken 为合法登录用户生成管理后台会话 Token（有效期 24 小时）。
+func (g *Guard) CreateAdminToken(username string) string {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	exp := time.Now().Add(24 * time.Hour).Unix()
+	payload := fmt.Sprintf("%s:%d", username, exp)
+	mac := hmac.New(sha256.New, g.tokenSecret)
+	mac.Write([]byte(payload))
+	sig := hex.EncodeToString(mac.Sum(nil))
+	return fmt.Sprintf("%s:%s", payload, sig)
+}
+
+// VerifyAdminToken 校验管理后台会话 Token 是否有效。
+func (g *Guard) VerifyAdminToken(token string) bool {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	parts := strings.Split(token, ":")
+	if len(parts) != 3 {
+		return false
+	}
+	user, expStr, sig := parts[0], parts[1], parts[2]
+	if user != g.rawUser {
+		return false
+	}
+	exp, err := strconv.ParseInt(expStr, 10, 64)
+	if err != nil || time.Now().Unix() > exp {
+		return false
+	}
+
+	payload := fmt.Sprintf("%s:%s", user, expStr)
+	mac := hmac.New(sha256.New, g.tokenSecret)
+	mac.Write([]byte(payload))
+	expectedSig := hex.EncodeToString(mac.Sum(nil))
+
+	return subtle.ConstantTimeCompare([]byte(sig), []byte(expectedSig)) == 1
+}
+
+// BannedList 返回当前所有正在被封禁的客户端 IP 列表。
+func (g *Guard) BannedList() []BannedClient {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	now := time.Now()
+	list := make([]BannedClient, 0)
+	for ip, c := range g.clients {
+		if now.Before(c.bannedUntil) {
+			list = append(list, BannedClient{
+				IP:          ip,
+				BannedUntil: c.bannedUntil,
+				DurationSec: int(time.Until(c.bannedUntil).Seconds()),
+			})
+		}
+	}
+	return list
+}
+
+// Unban 手动解封指定 IP。
+func (g *Guard) Unban(ip string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	delete(g.clients, ip)
 }
 
 // RunCleanup 定期清理过期的失败记录，直到 ctx 结束。
@@ -72,7 +174,7 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := ClientIP(r)
 
-		if until, banned := g.bannedUntil(ip); banned {
+		if until, banned := g.BannedUntil(ip); banned {
 			w.Header().Set("Retry-After", strconv.Itoa(int(time.Until(until).Seconds())+1))
 			http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
 			return
@@ -85,7 +187,7 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 			return
 		}
 		if !g.check(user, pass) {
-			banned := g.recordFailure(ip)
+			banned := g.RecordFailure(ip)
 			if banned {
 				g.logger.Warn("登录失败次数过多，已封禁 IP", "ip", ip, "user", user, "duration", g.ban)
 			} else {
@@ -95,7 +197,7 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 			return
 		}
 
-		g.recordSuccess(ip)
+		g.RecordSuccess(ip)
 		next.ServeHTTP(w, r)
 	})
 }
@@ -109,7 +211,8 @@ func (g *Guard) check(user, pass string) bool {
 	return uOK&pOK == 1
 }
 
-func (g *Guard) bannedUntil(ip string) (time.Time, bool) {
+// BannedUntil 查询 IP 是否正处于封禁状态。
+func (g *Guard) BannedUntil(ip string) (time.Time, bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	c, ok := g.clients[ip]
@@ -119,8 +222,8 @@ func (g *Guard) bannedUntil(ip string) (time.Time, bool) {
 	return c.bannedUntil, true
 }
 
-// recordFailure 记录一次失败，返回是否因此被封禁。
-func (g *Guard) recordFailure(ip string) bool {
+// RecordFailure 记录一次登录失败，返回是否因此被封禁。
+func (g *Guard) RecordFailure(ip string) bool {
 	if g.maxFailures <= 0 {
 		return false
 	}
@@ -142,7 +245,8 @@ func (g *Guard) recordFailure(ip string) bool {
 	return false
 }
 
-func (g *Guard) recordSuccess(ip string) {
+// RecordSuccess 记录一次登录成功，清除该 IP 的失败记录。
+func (g *Guard) RecordSuccess(ip string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if c, ok := g.clients[ip]; ok && !time.Now().Before(c.bannedUntil) {

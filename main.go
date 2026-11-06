@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -70,13 +71,19 @@ func main() {
 		for _, d := range cfg.Dirs {
 			fmt.Printf("  /%s  ->  %s\n", d.Name, d.Path)
 		}
+		printAdminURLs(cfg)
 	case "install":
 		// 安装前先校验配置，避免装上了却启动不了
 		if _, err := config.Load(cfgPath); err != nil {
 			fatal("配置文件有误 (%s):\n%v", cfgPath, err)
 		}
 		control(svc, cmd)
-	case "uninstall", "start", "stop", "restart":
+	case "start", "restart":
+		control(svc, cmd)
+		if cfg, err := config.Load(cfgPath); err == nil {
+			printAdminURLs(cfg)
+		}
+	case "uninstall", "stop":
 		control(svc, cmd)
 	case "version":
 		fmt.Println(version)
@@ -128,6 +135,46 @@ func control(svc service.Service, action string) {
 	fmt.Printf("执行 %s 成功\n", action)
 }
 
+// printAdminURLs 输出管理后台的本地与局域网访问地址。
+func printAdminURLs(cfg *config.Config) {
+	scheme := "http"
+	if cfg.Server.TLS.Enabled {
+		scheme = "https"
+	}
+
+	port := cfg.Server.Listen
+	if idx := strings.LastIndex(port, ":"); idx != -1 {
+		port = port[idx:]
+	} else {
+		port = ":" + port
+	}
+
+	fmt.Println("\n==================================================")
+	fmt.Println("🎬 video-webdav 管理后台地址:")
+	fmt.Printf("   本地访问:   %s://localhost%s/admin/\n", scheme, port)
+	for _, ip := range getLocalIPs() {
+		fmt.Printf("   局域网访问: %s://%s%s/admin/\n", scheme, ip, port)
+	}
+	fmt.Println("==================================================")
+}
+
+// getLocalIPs 获取本机所有的有效 IPv4 局域网地址。
+func getLocalIPs() []string {
+	var ips []string
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return ips
+	}
+	for _, addr := range addrs {
+		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+			if ip4 := ipnet.IP.To4(); ip4 != nil {
+				ips = append(ips, ip4.String())
+			}
+		}
+	}
+	return ips
+}
+
 func fatal(format string, a ...any) {
 	fmt.Fprintf(os.Stderr, format+"\n", a...)
 	os.Exit(1)
@@ -152,7 +199,8 @@ func (p *program) Start(s service.Service) error {
 	p.logger, p.logCloser = setupLogger(cfg)
 	p.logger.Info("video-server 启动中", "version", version, "config", p.cfgPath)
 
-	srv, err := server.New(cfg, p.logger)
+	server.Version = version
+	srv, err := server.New(cfg, p.cfgPath, p.logger)
 	if err == nil {
 		err = srv.Start()
 	}

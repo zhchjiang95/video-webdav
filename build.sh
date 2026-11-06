@@ -13,6 +13,9 @@ OUT="dist"
 
 mkdir -p "$OUT"
 
+echo "构建 Web 管理后台前端 (pnpm build) ..."
+(cd web && pnpm build)
+
 echo "编译 windows/${ARCH} 版本 ${VERSION} ..."
 CGO_ENABLED=0 GOOS=windows GOARCH="$ARCH" \
   go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \

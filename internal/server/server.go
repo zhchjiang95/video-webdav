@@ -1,16 +1,18 @@
-// Package server 组装 HTTP 服务：访问日志 -> 认证 -> 方法过滤 -> WebDAV。
+// Package server 组装 HTTP 服务：Web 管理后台 -> 访问日志 -> 认证 -> 方法过滤 -> WebDAV。
 package server
 
 import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/net/webdav"
@@ -19,26 +21,35 @@ import (
 	"video-server/internal/config"
 	"video-server/internal/tlscert"
 	"video-server/internal/vfs"
+	"video-server/web"
 )
+
+// Version 可以在启动时由 main 模块注入
+var Version = "dev"
 
 // allowedMethods 只读服务允许的 HTTP 方法
 const allowedMethods = "OPTIONS, GET, HEAD, PROPFIND"
 
-// Server 视频 WebDAV 服务。
+// Server 视频 WebDAV 与 Web 控制台复合服务。
 type Server struct {
-	cfg    *config.Config
-	logger *slog.Logger
-	http   *http.Server
-	guard  *auth.Guard
-	cancel context.CancelFunc
+	cfgPath   string
+	mu        sync.RWMutex
+	cfg       *config.Config
+	logger    *slog.Logger
+	http      *http.Server
+	guard     *auth.Guard
+	fsProxy   *dynamicFS
+	cancel    context.CancelFunc
+	startTime time.Time
 }
 
 // New 根据配置创建服务（尚未开始监听）。
-func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
+func New(cfg *config.Config, cfgPath string, logger *slog.Logger) (*Server, error) {
 	guard := auth.New(cfg.Auth, cfg.Security, logger)
+	fsProxy := newDynamicFS(vfs.New(cfg, logger))
 
 	dav := &webdav.Handler{
-		FileSystem: vfs.New(cfg, logger),
+		FileSystem: fsProxy,
 		LockSystem: webdav.NewMemLS(),
 		Logger: func(r *http.Request, err error) {
 			if err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, os.ErrPermission) {
@@ -47,9 +58,44 @@ func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 		},
 	}
 
-	var h http.Handler = dav
-	h = readOnly(h)
-	h = guard.Middleware(h)
+	s := &Server{
+		cfgPath:   cfgPath,
+		cfg:       cfg,
+		logger:    logger,
+		guard:     guard,
+		fsProxy:   fsProxy,
+		startTime: time.Now(),
+	}
+
+	// 组装 WebDAV 管道
+	var davHandler http.Handler = dav
+	davHandler = readOnly(davHandler)
+	davHandler = guard.Middleware(davHandler)
+
+	// 顶层多路复用路由器
+	mux := http.NewServeMux()
+
+	// 1. Web UI 静态资源处理
+	mux.Handle("/admin", http.RedirectHandler("/admin/", http.StatusMovedPermanently))
+	mux.Handle("/admin/", web.Handler())
+
+	// 2. Web 管理后台 REST API
+	mux.HandleFunc("/api/admin/", s.handleAdminAPI)
+
+	// 3. WebDAV 业务处理与根路径贴心跳转
+	rootHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 如果访问根路径 / 且是浏览器（Accept: text/html）未携带 Basic Auth，重定向到管理后台
+		if r.URL.Path == "/" && r.Method == http.MethodGet &&
+			strings.Contains(r.Header.Get("Accept"), "text/html") &&
+			r.Header.Get("Authorization") == "" {
+			http.Redirect(w, r, "/admin/", http.StatusFound)
+			return
+		}
+		davHandler.ServeHTTP(w, r)
+	})
+	mux.Handle("/", rootHandler)
+
+	var h http.Handler = mux
 	if cfg.Log.AccessLog {
 		h = accessLog(h, logger)
 	}
@@ -60,9 +106,7 @@ func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 		ReadHeaderTimeout: 15 * time.Second,
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    64 << 10,
-		// 公网上大量扫描器会产生 TLS 握手错误，降级为 debug 日志避免刷屏
-		ErrorLog: slog.NewLogLogger(logger.Handler(), slog.LevelDebug),
-		// 注意：不设置 WriteTimeout，否则长时间播放视频会被强制断开
+		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelDebug),
 	}
 
 	if cfg.Server.TLS.Enabled {
@@ -76,7 +120,13 @@ func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 		}
 	}
 
-	return &Server{cfg: cfg, logger: logger, http: srv, guard: guard}, nil
+	s.http = srv
+	return s, nil
+}
+
+// HTTPHandler 返回底层 HTTP 处理链，供测试或挂载使用。
+func (s *Server) HTTPHandler() http.Handler {
+	return s.http.Handler
 }
 
 // Start 开始监听端口（同步返回端口占用等错误），请求处理在后台进行。
@@ -109,7 +159,9 @@ func (s *Server) Start() error {
 	} else {
 		s.logger.Warn("未启用 HTTPS，账号密码将以明文传输，不建议暴露到公网")
 	}
+
 	s.logger.Info("服务已启动", "listen", s.cfg.Server.Listen, "scheme", scheme)
+	s.logger.Info("Web管理后台入口", "url", fmt.Sprintf("%s://localhost%s/admin/", scheme, s.cfg.Server.Listen))
 	for _, d := range s.cfg.Dirs {
 		s.logger.Info("视频目录", "name", d.Name, "path", d.Path)
 	}
@@ -134,14 +186,12 @@ func readOnly(next http.Handler) http.Handler {
 		switch r.Method {
 		case http.MethodGet, http.MethodHead:
 		case http.MethodOptions:
-			// 自行响应 OPTIONS，只声明只读能力（DAV 等级 1，不支持锁）
 			w.Header().Set("Allow", allowedMethods)
 			w.Header().Set("DAV", "1")
 			w.Header().Set("MS-Author-Via", "DAV")
 			w.WriteHeader(http.StatusOK)
 			return
 		case "PROPFIND":
-			// 不带 Depth 或 Depth: infinity 会递归遍历整个目录树，开销巨大，统一降为 1
 			d := strings.TrimSpace(r.Header.Get("Depth"))
 			if d == "" || strings.EqualFold(d, "infinity") {
 				r.Header.Set("Depth", "1")
@@ -164,6 +214,12 @@ func accessLog(next http.Handler, logger *slog.Logger) http.Handler {
 		if sw.status == 0 {
 			sw.status = http.StatusOK
 		}
+
+		// 管理后台静态资源请求（/admin/assets）无需繁琐刷屏 access_log
+		if strings.HasPrefix(r.URL.Path, "/admin/assets") {
+			return
+		}
+
 		attrs := []any{
 			"ip", auth.ClientIP(r),
 			"method", r.Method,
@@ -203,7 +259,6 @@ func (w *statusWriter) Write(b []byte) (int, error) {
 	return n, err
 }
 
-// ReadFrom 透传给底层 ResponseWriter，保留非 TLS 场景下的零拷贝发送能力。
 func (w *statusWriter) ReadFrom(r io.Reader) (int64, error) {
 	if w.status == 0 {
 		w.status = http.StatusOK
@@ -213,5 +268,4 @@ func (w *statusWriter) ReadFrom(r io.Reader) (int64, error) {
 	return n, err
 }
 
-// Unwrap 供 http.ResponseController 获取底层 ResponseWriter。
 func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
