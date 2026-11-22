@@ -250,3 +250,9 @@ Windows 服务默认以 **LocalSystem** 账号运行，**看不到当前用户�
 - 日志文件默认在程序目录下的 `logs\video-server.log`，会自动轮转（单个文件 20MB，保留 5 个，最多 30 天）。
 - 如果以服务方式启动失败（比如配置文件有误），错误会写进 **Windows 事件查看器 → Windows 日志 → 应用程序**。
 - 想看更详细的信息，把 `log.level` 设为 `debug`。
+
+## 关于作者与相关链接
+
+- **GitHub 仓库**：https://github.com/zhchjiang95/video-webdav
+- **官网**：https://fiume.cn
+- **微信公众号**：Slothful

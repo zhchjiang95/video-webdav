@@ -498,6 +498,38 @@ onUnmounted(() => {
             <span>{{ loginLoading ? '登录中...' : '进入控制台' }}</span>
           </button>
         </form>
+
+        <!-- 作者与项目信息 -->
+        <div class="mt-6 pt-4 border-t border-slate-100 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-[11px] text-slate-400">
+          <a
+            href="https://github.com/zhchjiang95/video-webdav"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="hover:text-indigo-600 transition inline-flex items-center gap-1"
+          >
+            <span>GitHub</span>
+            <ExternalLink class="w-3 h-3" />
+          </a>
+          <span>·</span>
+          <a
+            href="https://fiume.cn"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="hover:text-indigo-600 transition inline-flex items-center gap-1"
+          >
+            <span>官网 fiume.cn</span>
+            <ExternalLink class="w-3 h-3" />
+          </a>
+          <span>·</span>
+          <button
+            type="button"
+            @click="copyText('Slothful')"
+            class="hover:text-indigo-600 transition"
+            title="点击复制公众号名称"
+          >
+            公众号：Slothful
+          </button>
+        </div>
       </div>
     </div>
 
@@ -1112,6 +1144,40 @@ onUnmounted(() => {
           </div>
         </div>
       </main>
+
+      <!-- 页脚：项目与作者信息 -->
+      <footer class="border-t border-slate-200/80 bg-white/70 py-4 mt-8">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 text-xs text-slate-500">
+          <a
+            href="https://github.com/zhchjiang95/video-webdav"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="hover:text-indigo-600 transition inline-flex items-center gap-1"
+          >
+            <span>GitHub: zhchjiang95/video-webdav</span>
+            <ExternalLink class="w-3 h-3" />
+          </a>
+          <span class="text-slate-300">|</span>
+          <a
+            href="https://fiume.cn"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="hover:text-indigo-600 transition inline-flex items-center gap-1"
+          >
+            <span>官网：fiume.cn</span>
+            <ExternalLink class="w-3 h-3" />
+          </a>
+          <span class="text-slate-300">|</span>
+          <button
+            type="button"
+            @click="copyText('Slothful')"
+            class="hover:text-indigo-600 transition"
+            title="点击复制公众号名称"
+          >
+            公众号：Slothful
+          </button>
+        </div>
+      </footer>
     </div>
 
     <!-- 添加 / 编辑媒体目录 Modal 弹窗 -->

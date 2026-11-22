@@ -57,6 +57,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvDirEmptyHint: TextView
     private lateinit var layoutDirList: LinearLayout
     private lateinit var tvFooterTip: TextView
+    private lateinit var tvLinkGithub: TextView
+    private lateinit var tvLinkWebsite: TextView
+    private lateinit var tvLinkWechat: TextView
 
     private var currentSummary: ConfigSummary? = null
 
@@ -122,6 +125,9 @@ class MainActivity : AppCompatActivity() {
         tvDirEmptyHint = findViewById(R.id.tvDirEmptyHint)
         layoutDirList = findViewById(R.id.layoutDirList)
         tvFooterTip = findViewById(R.id.tvFooterTip)
+        tvLinkGithub = findViewById(R.id.tvLinkGithub)
+        tvLinkWebsite = findViewById(R.id.tvLinkWebsite)
+        tvLinkWechat = findViewById(R.id.tvLinkWechat)
     }
 
     private fun setupListeners() {
@@ -155,6 +161,18 @@ class MainActivity : AppCompatActivity() {
 
         btnGrantStorage.setOnClickListener { requestStoragePermission() }
         btnIgnoreBattery.setOnClickListener { requestIgnoreBatteryOptimization() }
+
+        tvLinkGithub.setOnClickListener {
+            openExternalUrl("https://github.com/zhchjiang95/video-webdav")
+        }
+        tvLinkWebsite.setOnClickListener {
+            openExternalUrl("https://fiume.cn")
+        }
+        tvLinkWechat.setOnClickListener {
+            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            cm.setPrimaryClip(ClipData.newPlainText("公众号", "Slothful"))
+            toast("已复制公众号名称：Slothful")
+        }
 
         btnPickFolder.setOnClickListener {
             if (!hasStoragePermission()) {
@@ -442,6 +460,14 @@ class MainActivity : AppCompatActivity() {
     private fun refreshPermissionCards() {
         cardStorageWarn.visibility = if (hasStoragePermission()) View.GONE else View.VISIBLE
         cardBatteryTip.visibility = if (isIgnoringBatteryOptimizations()) View.GONE else View.VISIBLE
+    }
+
+    private fun openExternalUrl(url: String) {
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+        } catch (_: Exception) {
+            toast("无法打开链接：$url")
+        }
     }
 
     private fun toast(msg: String) {
