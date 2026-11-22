@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// boolCache 是带过期时间的简单缓存，用于记录“目录是否包含视频”。
+// boolCache 是带过期时间的简单缓存，用于记录“目录是否包含所选主媒体文件”。
 type boolCache struct {
 	mu  sync.Mutex
 	ttl time.Duration

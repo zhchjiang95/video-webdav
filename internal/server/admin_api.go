@@ -5,8 +5,10 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -25,7 +27,8 @@ type adminLoginReq struct {
 
 // testPathReq 路径测试请求结构
 type testPathReq struct {
-	Path string `json:"path"`
+	Path  string   `json:"path"`
+	Types []string `json:"types"`
 }
 
 // unbanReq 解封 IP 请求结构
@@ -227,7 +230,8 @@ func (s *Server) apiGetConfig(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) apiSaveConfig(w http.ResponseWriter, r *http.Request) {
-	var newCfg config.Config
+	// 以默认配置作为底板反序列化，确保省略的新字段（如 audio_exts 等）不会变为空
+	newCfg := *config.Default()
 	if err := json.NewDecoder(r.Body).Decode(&newCfg); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "配置格式错误: " + err.Error()})
 		return
@@ -290,6 +294,12 @@ func (s *Server) apiTestPath(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	types, err := config.NormalizeFileTypes(req.Types)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "文件类型参数无效: " + err.Error()})
+		return
+	}
+
 	cleanPath := filepath.Clean(req.Path)
 	fi, err := os.Stat(cleanPath)
 	if err != nil {
@@ -307,25 +317,83 @@ func (s *Server) apiTestPath(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 扫描目录下的视频样本
-	entries, _ := os.ReadDir(cleanPath)
-	videoCount := 0
-	samples := make([]string, 0)
-
+	// 读取当前过滤配置（扩展名、排除规则、符号链接策略）
 	s.mu.RLock()
-	videoExts := make(map[string]bool)
-	for _, e := range s.cfg.Filter.VideoExts {
-		videoExts[strings.ToLower(e)] = true
-	}
+	primaryExts, _ := s.cfg.Filter.MatchExts(types)
+	excludes := append([]string(nil), s.cfg.Filter.ExcludeNames...)
+	followSymlinks := s.cfg.Filter.FollowSymlinks
 	s.mu.RUnlock()
 
-	for _, e := range entries {
-		if !e.IsDir() {
-			ext := strings.ToLower(filepath.Ext(e.Name()))
-			if videoExts[ext] {
-				videoCount++
-				if len(samples) < 3 {
-					samples = append(samples, e.Name())
+	isExcluded := func(name string) bool {
+		lower := strings.ToLower(name)
+		for _, p := range excludes {
+			if ok, _ := path.Match(p, lower); ok {
+				return true
+			}
+		}
+		return false
+	}
+
+	// 有界广度优先扫描（最多 3 层子目录、最多 100 个目录），既能发现子目录中的媒体文件，又避免大型 NAS 卡顿
+	const (
+		maxTestDepth = 3
+		maxTestDirs  = 100
+	)
+	type dirTask struct {
+		dir   string
+		depth int
+	}
+	queue := []dirTask{{dir: cleanPath, depth: 0}}
+	visitedDirs := 0
+	matchCount := 0
+	truncated := false
+	samples := make([]string, 0, 5)
+
+	for len(queue) > 0 {
+		if visitedDirs >= maxTestDirs {
+			truncated = true
+			break
+		}
+		cur := queue[0]
+		queue = queue[1:]
+		visitedDirs++
+
+		entries, readErr := os.ReadDir(cur.dir)
+		if readErr != nil {
+			continue
+		}
+		for _, e := range entries {
+			name := e.Name()
+			if isExcluded(name) {
+				continue
+			}
+			mode := e.Type()
+			fullPath := filepath.Join(cur.dir, name)
+			if mode&(fs.ModeSymlink|fs.ModeIrregular) != 0 {
+				if !followSymlinks {
+					continue
+				}
+				resolved, statErr := os.Stat(fullPath)
+				if statErr != nil {
+					continue
+				}
+				mode = resolved.Mode()
+			}
+			if mode.IsDir() {
+				if cur.depth < maxTestDepth {
+					queue = append(queue, dirTask{dir: fullPath, depth: cur.depth + 1})
+				} else {
+					truncated = true
+				}
+				continue
+			}
+			if mode.IsRegular() {
+				ext := strings.ToLower(filepath.Ext(name))
+				if primaryExts[ext] {
+					matchCount++
+					if len(samples) < 5 {
+						samples = append(samples, name)
+					}
 				}
 			}
 		}
@@ -334,7 +402,10 @@ func (s *Server) apiTestPath(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"exists":       true,
 		"is_dir":       true,
-		"video_count":  videoCount,
+		"match_count":  matchCount,
+		"video_count":  matchCount, // 兼容旧版前端字段名
+		"truncated":    truncated,
+		"types":        types,
 		"sample_files": samples,
 	})
 }

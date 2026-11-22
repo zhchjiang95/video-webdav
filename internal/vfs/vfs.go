@@ -1,6 +1,6 @@
 // Package vfs 实现一个只读的虚拟文件系统（webdav.FileSystem）：
-//   - 根目录为虚拟目录，每个配置的视频目录显示为一个子文件夹；
-//   - 只暴露允许的扩展名（视频、字幕等），其余文件对客户端完全不可见；
+//   - 根目录为虚拟目录，每个配置的媒体目录显示为一个子文件夹；
+//   - 按各目录配置的文件类型（视频/音频/图片等）及其伴随文件过滤，其余文件对客户端完全不可见；
 //   - 严格校验路径，禁止跳出配置目录；
 //   - 拒绝一切写操作。
 package vfs
@@ -23,26 +23,27 @@ import (
 	"video-server/internal/config"
 )
 
-// maxScanDepth 判断“目录是否包含视频”时的最大递归深度
+// maxScanDepth 判断“目录是否包含所选主媒体文件”时的最大递归深度
 const maxScanDepth = 12
 
-// FS 只读、多根目录、按扩展名过滤的文件系统。
+// FS 只读、多根目录、按目录文件类型和扩展名过滤的文件系统。
 type FS struct {
-	roots       []*root
-	rootByName  map[string]*root
-	allowedExts map[string]bool
-	videoExts   map[string]bool
-	excludes    []string
-	hideEmpty   bool
-	follow      bool
-	cache       *boolCache
-	startTime   time.Time
-	logger      *slog.Logger
+	roots      []*root
+	rootByName map[string]*root
+	excludes   []string
+	hideEmpty  bool
+	follow     bool
+	cache      *boolCache
+	startTime  time.Time
+	logger     *slog.Logger
 }
 
 type root struct {
-	name string // 虚拟目录名
-	path string // 本地真实路径
+	name        string          // 虚拟目录名
+	path        string          // 本地真实路径
+	types       []string        // 允许扫描的文件类型
+	primaryExts map[string]bool // 主媒体扩展名（用于判断目录是否为空）
+	allowedExts map[string]bool // 全部允许暴露的扩展名（含伴随文件与 extra_exts）
 }
 
 // 编译期确认实现了 webdav.FileSystem 接口
@@ -51,30 +52,25 @@ var _ webdav.FileSystem = (*FS)(nil)
 // New 根据配置创建文件系统。
 func New(cfg *config.Config, logger *slog.Logger) *FS {
 	f := &FS{
-		rootByName:  make(map[string]*root),
-		allowedExts: make(map[string]bool),
-		videoExts:   make(map[string]bool),
-		excludes:    cfg.Filter.ExcludeNames,
-		hideEmpty:   cfg.Filter.HideEmptyDirs,
-		follow:      cfg.Filter.FollowSymlinks,
-		cache:       newBoolCache(cfg.Filter.EmptyDirCacheTTL.Duration()),
-		startTime:   time.Now(),
-		logger:      logger,
+		rootByName: make(map[string]*root),
+		excludes:   cfg.Filter.ExcludeNames,
+		hideEmpty:  cfg.Filter.HideEmptyDirs,
+		follow:     cfg.Filter.FollowSymlinks,
+		cache:      newBoolCache(cfg.Filter.EmptyDirCacheTTL.Duration()),
+		startTime:  time.Now(),
+		logger:     logger,
 	}
 	for _, d := range cfg.Dirs {
-		r := &root{name: d.Name, path: d.Path}
+		primary, allowed := cfg.Filter.MatchExts(d.Types)
+		r := &root{
+			name:        d.Name,
+			path:        d.Path,
+			types:       d.Types,
+			primaryExts: primary,
+			allowedExts: allowed,
+		}
 		f.roots = append(f.roots, r)
 		f.rootByName[d.Name] = r
-	}
-	for _, e := range cfg.Filter.VideoExts {
-		f.videoExts[e] = true
-		f.allowedExts[e] = true
-	}
-	for _, e := range cfg.Filter.SubtitleExts {
-		f.allowedExts[e] = true
-	}
-	for _, e := range cfg.Filter.ExtraExts {
-		f.allowedExts[e] = true
 	}
 	return f
 }
@@ -125,7 +121,7 @@ func (f *FS) OpenFile(_ context.Context, name string, flag int, _ os.FileMode) (
 		f.logger.Warn("打开文件失败", "path", t.real, "err", err)
 		return nil, notExist("open", t.virtual)
 	}
-	return &file{File: h, fs: f, real: t.real, info: info}, nil
+	return &file{File: h, fs: f, root: t.root, real: t.real, info: info}, nil
 }
 
 // target 是虚拟路径解析后的结果。
@@ -187,7 +183,7 @@ func (f *FS) statTarget(t *target) (os.FileInfo, error) {
 		return renamedInfo{FileInfo: fi, name: t.root.name}, nil
 	}
 	fi, err := f.lstat(t.real)
-	if err != nil || !f.visible(fi.Name(), fi.Mode()) {
+	if err != nil || !f.visible(t.root, fi.Name(), fi.Mode()) {
 		return nil, notExist("stat", t.virtual)
 	}
 	return fi, nil
@@ -201,8 +197,8 @@ func (f *FS) lstat(p string) (os.FileInfo, error) {
 	return os.Lstat(p)
 }
 
-// visible 判断一个条目是否允许暴露给客户端。
-func (f *FS) visible(name string, mode fs.FileMode) bool {
+// visible 判断一个条目在指定根目录下是否允许暴露给客户端。
+func (f *FS) visible(r *root, name string, mode fs.FileMode) bool {
 	if f.excluded(name) {
 		return false
 	}
@@ -213,15 +209,15 @@ func (f *FS) visible(name string, mode fs.FileMode) bool {
 	case mode.IsDir():
 		return true
 	case mode.IsRegular():
-		return f.allowedExts[strings.ToLower(filepath.Ext(name))]
+		return r.allowedExts[strings.ToLower(filepath.Ext(name))]
 	default:
 		return false
 	}
 }
 
-// isVideo 判断文件名是否为视频文件。
-func (f *FS) isVideo(name string) bool {
-	return f.videoExts[strings.ToLower(filepath.Ext(name))]
+// isPrimaryMedia 判断文件名是否为该根目录所选类型的主媒体文件。
+func (f *FS) isPrimaryMedia(r *root, name string) bool {
+	return r.primaryExts[strings.ToLower(filepath.Ext(name))]
 }
 
 // excluded 判断名称是否命中排除规则（不区分大小写）。
@@ -235,8 +231,8 @@ func (f *FS) excluded(name string) bool {
 	return false
 }
 
-// listDir 列出目录下所有可见条目。
-func (f *FS) listDir(dir string) ([]os.FileInfo, error) {
+// listDir 列出指定根目录下某个目录的所有可见条目。
+func (f *FS) listDir(r *root, dir string) ([]os.FileInfo, error) {
 	h, err := os.Open(dir)
 	if err != nil {
 		return nil, err
@@ -261,10 +257,10 @@ func (f *FS) listDir(dir string) ([]os.FileInfo, error) {
 			}
 			fi = resolved
 		}
-		if !f.visible(fi.Name(), fi.Mode()) {
+		if !f.visible(r, fi.Name(), fi.Mode()) {
 			continue
 		}
-		if fi.IsDir() && f.hideEmpty && !f.hasVideo(filepath.Join(dir, fi.Name()), 1) {
+		if fi.IsDir() && f.hideEmpty && !f.hasMedia(r, filepath.Join(dir, fi.Name()), 1) {
 			continue
 		}
 		out = append(out, fi)
@@ -273,23 +269,24 @@ func (f *FS) listDir(dir string) ([]os.FileInfo, error) {
 	return out, nil
 }
 
-// hasVideo 判断目录（含子目录）中是否存在视频文件，结果带缓存。
-func (f *FS) hasVideo(dir string, depth int) bool {
-	if v, ok := f.cache.get(dir); ok {
+// hasMedia 判断目录（含子目录）中是否存在该根目录所选类型的主媒体文件，结果按根目录隔离缓存。
+func (f *FS) hasMedia(r *root, dir string, depth int) bool {
+	cacheKey := r.name + "\x00" + dir
+	if v, ok := f.cache.get(cacheKey); ok {
 		return v
 	}
-	v := f.scanForVideo(dir, depth)
-	f.cache.set(dir, v)
+	v := f.scanForMedia(r, dir, depth)
+	f.cache.set(cacheKey, v)
 	return v
 }
 
-func (f *FS) scanForVideo(dir string, depth int) bool {
+func (f *FS) scanForMedia(r *root, dir string, depth int) bool {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return false
 	}
 	var subdirs []string
-	// 先看当前目录的文件，找到视频即可提前返回
+	// 先看当前目录的文件，找到目标媒体文件即可提前返回
 	for _, e := range entries {
 		name := e.Name()
 		mode := e.Type()
@@ -300,14 +297,14 @@ func (f *FS) scanForVideo(dir string, depth int) bool {
 			}
 			mode = fi.Mode()
 		}
-		if !f.visible(name, mode) {
+		if !f.visible(r, name, mode) {
 			continue
 		}
 		if mode.IsDir() {
 			subdirs = append(subdirs, filepath.Join(dir, name))
 			continue
 		}
-		if f.isVideo(name) {
+		if f.isPrimaryMedia(r, name) {
 			return true
 		}
 	}
@@ -315,20 +312,20 @@ func (f *FS) scanForVideo(dir string, depth int) bool {
 		return false
 	}
 	for _, sd := range subdirs {
-		if f.hasVideo(sd, depth+1) {
+		if f.hasMedia(r, sd, depth+1) {
 			return true
 		}
 	}
 	return false
 }
 
-// rootInfos 返回虚拟根目录下的条目（即配置的各视频目录）。
+// rootInfos 返回虚拟根目录下的条目（即配置的各媒体目录）。
 func (f *FS) rootInfos() []os.FileInfo {
 	out := make([]os.FileInfo, 0, len(f.roots))
 	for _, r := range f.roots {
 		fi, err := os.Stat(r.path)
 		if err != nil {
-			f.logger.Warn("视频目录不可访问", "name", r.name, "path", r.path, "err", err)
+			f.logger.Warn("媒体目录不可访问", "name", r.name, "path", r.path, "err", err)
 			continue
 		}
 		out = append(out, renamedInfo{FileInfo: fi, name: r.name})
@@ -377,6 +374,7 @@ func notExist(op, name string) error {
 type file struct {
 	*os.File
 	fs      *FS
+	root    *root
 	real    string
 	info    os.FileInfo
 	entries []os.FileInfo
@@ -395,7 +393,7 @@ func (fl *file) Readdir(count int) ([]os.FileInfo, error) {
 		return nil, &os.PathError{Op: "readdir", Path: fl.info.Name(), Err: errors.New("不是目录")}
 	}
 	if !fl.loaded {
-		list, err := fl.fs.listDir(fl.real)
+		list, err := fl.fs.listDir(fl.root, fl.real)
 		if err != nil {
 			return nil, err
 		}

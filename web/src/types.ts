@@ -20,10 +20,14 @@ export interface BannedIP {
   duration_sec: number
 }
 
+// 支持的目录文件类型
+export type FileType = 'video' | 'audio' | 'image'
+
 // 单个目录配置
 export interface DirConfig {
   name: string
   path: string
+  types: FileType[]
 }
 
 // 完整服务配置
@@ -49,6 +53,9 @@ export interface AppConfig {
   filter: {
     video_exts: string[]
     subtitle_exts: string[]
+    audio_exts: string[]
+    lyric_exts: string[]
+    image_exts: string[]
     extra_exts: string[]
     exclude_names: string[]
     hide_empty_dirs: boolean
@@ -66,7 +73,10 @@ export interface AppConfig {
 export interface TestPathResult {
   exists: boolean
   is_dir: boolean
-  video_count: number
+  match_count: number
+  video_count?: number
+  truncated?: boolean
+  types?: FileType[]
   sample_files?: string[]
   error?: string
 }

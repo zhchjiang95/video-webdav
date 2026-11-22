@@ -1,0 +1,153 @@
+======================================================================
+                    video-server 配置与使用说明
+======================================================================
+
+本工具是一个轻量级、纯只读的 WebDAV 媒体服务（支持视频、音频、图片），
+内置 Web 可视化管理后台，支持多目录映射、按目录指定扫描文件类型、
+热更新生效以及注册为 Windows 后台服务。
+
+
+----------------------------------------------------------------------
+一、开箱快速上手（3 步启动）
+----------------------------------------------------------------------
+
+1. 直接启动程序
+   本目录已内置一份默认可用的 HTTP 配置文件 config.yaml，双击或命令行运行：
+     .\video-server.exe
+
+2. 打开 Web 可视化管理后台
+   浏览器访问：
+     http://localhost:8443/admin/
+   （同局域网其他设备可用 http://<本机局域网IP>:8443/admin/ 访问）
+
+   默认登录账号：admin
+   默认登录密码：admin123456
+   【安全提醒】首次登录后，请务必前往「服务配置」修改为高强度密码！
+
+3. 添加媒体目录
+   在管理后台点击「媒体目录」->「添加媒体目录」：
+   - 填写显示名称（客户端看到的文件夹名，例如：电影、无损音乐、相册）
+   - 勾选该目录要扫描的文件类型（可多选：视频 / 音频 / 图片）
+   - 填写本地磁盘绝对路径（例如 D:\Movies），可点击「测试此路径」检查
+   - 点击「确定」保存，立即热生效，无需重启服务！
+
+
+----------------------------------------------------------------------
+二、config.yaml 配置项详解
+----------------------------------------------------------------------
+
+提示：大部分配置都可以在 Web 管理后台可视化修改并自动保存；
+如需手工编辑 config.yaml，请注意：
+  * Windows 路径请用单引号包裹（例如 'D:\Movies'），或改用正斜杠 D:/Movies
+  * 修改配置后可运行 .\video-server.exe check 校验语法是否正确
+
+1. server（网络与 HTTPS）
+   - listen: ":8443"
+     服务监听端口。国内家庭宽带通常封禁 80/443/8080，推荐使用 8443、9000 等端口。
+   - tls.enabled: false
+     是否开启 HTTPS。默认关闭（HTTP），开箱即用；如需公网 HTTPS，设为 true
+     并填写 cert_file（证书）与 key_file（私钥）路径（支持证书覆盖 1 分钟内热更新）。
+
+2. auth（登录认证）
+   - username / password
+     WebDAV 客户端与 Web 管理后台共用同一套账号密码。
+     密码长度至少 8 位，公网使用请务必设置强密码。
+
+3. security（登录防爆破）
+   - max_failures: 5        （允许连续失败次数，设为 0 关闭封禁）
+   - failure_window: 10m    （统计时间窗口）
+   - ban_duration: 30m      （触发封禁后的锁定时间，可在后台手动解封）
+
+4. dirs（媒体目录列表，支持多个）
+   示例：
+     dirs:
+       - name: "电影"
+         path: 'D:\Movies'
+         types: ["video"]
+       - name: "音乐"
+         path: 'D:\Music'
+         types: ["audio"]
+       - name: "相册"
+         path: 'D:\Photos'
+         types: ["image"]
+
+   说明：
+   - name  : 在 WebDAV 根目录下展示的文件夹名，不能使用 admin / api。
+   - path  : 本地绝对路径，或 UNC 网络共享路径（如 '\\NAS\Movies'）。
+   - types : 该目录只扫描并暴露的文件类型（支持多选，留空默认 ["video"]）：
+             * video : 视频文件（自动附带字幕 subtitle_exts）
+             * audio : 音频文件（自动附带歌词/分轨 lyric_exts）
+             * image : 图片文件
+
+5. filter（文件过滤规则）
+   - video_exts         : 视频扩展名列表
+   - subtitle_exts      : 字幕扩展名（types 含 video 时自动附带）
+   - audio_exts         : 音频扩展名列表
+   - lyric_exts         : 歌词与分轨扩展名（types 含 audio 时自动附带，默认 .lrc/.cue）
+   - image_exts         : 图片扩展名列表
+   - extra_exts         : 全局额外暴露的扩展名（如 [".nfo"]，对所有目录生效）
+   - exclude_names      : 隐藏的文件/目录名，支持通配符 * ?，不区分大小写
+   - hide_empty_dirs    : 为 true 时，自动隐藏不包含所选类型主媒体文件的空目录
+   - empty_dir_cache_ttl: 空目录检测缓存时长（默认 2m）
+   - follow_symlinks    : 是否跟随符号链接/目录联接，默认 false（更安全）
+
+6. log（日志配置）
+   - file       : 日志文件路径，默认 logs\video-server.log（自动轮转）
+   - level      : 日志级别，可选 debug / info / warn / error
+   - access_log : 是否记录每次请求
+
+
+----------------------------------------------------------------------
+三、Windows 常用命令（在 PowerShell / CMD 中运行）
+----------------------------------------------------------------------
+
+  .\video-server.exe             前台直接运行（按 Ctrl+C 停止）
+  .\video-server.exe check       校验 config.yaml 配置是否正确
+  .\video-server.exe version     查看当前版本号
+
+以下系统服务命令需“以管理员身份运行”PowerShell / CMD：
+  .\video-server.exe install     注册为 Windows 开机自启服务（服务名 VideoServer）
+  .\video-server.exe start       启动后台服务
+  .\video-server.exe stop        停止后台服务
+  .\video-server.exe restart     重启后台服务
+  .\video-server.exe uninstall   卸载系统服务
+
+放行 Windows 防火墙端口示例（管理员 PowerShell）：
+  netsh advfirewall firewall add rule name="VideoServer" dir=in action=allow protocol=TCP localport=8443
+
+
+----------------------------------------------------------------------
+四、客户端接入示例（VidHub / Infuse / 音乐播放器等）
+----------------------------------------------------------------------
+
+  协议类型 : WebDAV
+  传输协议 : HTTP（启用 TLS 证书后选 HTTPS）
+  服务器   : 本机局域网 IP、公网 IP 或域名
+  端口     : 8443（或路由器转发的外网端口）
+  路径     : /
+  用户名   : config.yaml 中的 auth.username
+  密码     : config.yaml 中的 auth.password
+
+提示：本服务为纯只读 WebDAV，拒绝上传、删除、重命名等一切写操作，
+可放心连接各类播放器，无需担心误删本地文件。
+
+
+----------------------------------------------------------------------
+五、常见问题
+----------------------------------------------------------------------
+
+1. 修改配置后需要重启吗？
+   - 在 Web 管理后台增删改媒体目录、调整文件类型/扩展名、修改密码或安全策略，
+     均立即热生效，无需重启服务。
+   - 仅修改监听端口（listen）或 HTTPS 开关/证书路径时，需要重启服务生效。
+
+2. 注册为 Windows 服务后看不到映射的网络驱动器（如 Z: 盘）？
+   - Windows 服务默认使用 LocalSystem 账号，无法访问用户态映射盘符。
+   - 解决办法：路径改用 UNC 写法（如 '\\NAS\Movies'），或在 services.msc 中
+     将 VideoServer 服务的“登录身份”改为你的 Windows 账号。
+
+3. 新增文件后为什么新建的子文件夹没有立刻显示？
+   - hide_empty_dirs 结果默认缓存 2 分钟（empty_dir_cache_ttl），稍等缓存刷新
+     即可看到；已有目录内新增文件则会立即可见。
+
+更多完整配置示例可参考同目录下的 config.example.yaml。

@@ -162,8 +162,12 @@ func (s *Server) Start() error {
 
 	s.logger.Info("服务已启动", "listen", s.cfg.Server.Listen, "scheme", scheme)
 	s.logger.Info("Web管理后台入口", "url", fmt.Sprintf("%s://localhost%s/admin/", scheme, s.cfg.Server.Listen))
-	for _, d := range s.cfg.Dirs {
-		s.logger.Info("视频目录", "name", d.Name, "path", d.Path)
+	if len(s.cfg.Dirs) == 0 {
+		s.logger.Warn("当前尚未配置媒体目录，请访问 Web 管理后台添加目录")
+	} else {
+		for _, d := range s.cfg.Dirs {
+			s.logger.Info("媒体目录", "name", d.Name, "path", d.Path, "types", d.Types)
+		}
 	}
 	return nil
 }

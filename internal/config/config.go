@@ -105,25 +105,40 @@ type SecurityConfig struct {
 	BanDuration   Duration `yaml:"ban_duration" json:"ban_duration"`
 }
 
-// DirConfig 一个对外暴露的视频目录。
+// 支持的目录文件类型常量。
+const (
+	FileTypeVideo = "video"
+	FileTypeAudio = "audio"
+	FileTypeImage = "image"
+)
+
+// ValidFileTypes 所有受支持的文件类型（按展示顺序排列）。
+var ValidFileTypes = []string{FileTypeVideo, FileTypeAudio, FileTypeImage}
+
+// DirConfig 一个对外暴露的媒体目录。
 type DirConfig struct {
 	// Name 在 WebDAV 根目录下显示的文件夹名
 	Name string `yaml:"name" json:"name"`
 	// Path 本地磁盘上的绝对路径
 	Path string `yaml:"path" json:"path"`
+	// Types 该目录只扫描并暴露的文件类型（支持 video / audio / image，多选；留空默认 ["video"]）
+	Types []string `yaml:"types" json:"types"`
 }
 
 // FilterConfig 文件过滤规则。
 type FilterConfig struct {
 	VideoExts    []string `yaml:"video_exts" json:"video_exts"`
 	SubtitleExts []string `yaml:"subtitle_exts" json:"subtitle_exts"`
-	// ExtraExts 额外允许暴露的扩展名（如 .nfo、.jpg），默认为空
+	AudioExts    []string `yaml:"audio_exts" json:"audio_exts"`
+	LyricExts    []string `yaml:"lyric_exts" json:"lyric_exts"`
+	ImageExts    []string `yaml:"image_exts" json:"image_exts"`
+	// ExtraExts 额外允许暴露的扩展名（如 .nfo），对所有目录生效，默认为空
 	ExtraExts []string `yaml:"extra_exts" json:"extra_exts"`
 	// ExcludeNames 需要隐藏的文件/目录名（支持通配符，不区分大小写）
 	ExcludeNames []string `yaml:"exclude_names" json:"exclude_names"`
-	// HideEmptyDirs 隐藏不包含任何视频文件的目录
+	// HideEmptyDirs 隐藏不包含任何所选主媒体文件的目录
 	HideEmptyDirs bool `yaml:"hide_empty_dirs" json:"hide_empty_dirs"`
-	// EmptyDirCacheTTL “目录是否包含视频”判断结果的缓存时间
+	// EmptyDirCacheTTL “目录是否包含媒体文件”判断结果的缓存时间
 	EmptyDirCacheTTL Duration `yaml:"empty_dir_cache_ttl" json:"empty_dir_cache_ttl"`
 	// FollowSymlinks 是否跟随符号链接/目录联接（junction），默认关闭以防越权访问
 	FollowSymlinks bool `yaml:"follow_symlinks" json:"follow_symlinks"`
@@ -154,6 +169,15 @@ func Default() *Config {
 				".ts", ".m2ts", ".mts", ".mpg", ".mpeg", ".vob", ".rmvb", ".rm", ".3gp", ".iso",
 			},
 			SubtitleExts: []string{".srt", ".ass", ".ssa", ".sup", ".vtt", ".sub", ".idx"},
+			AudioExts: []string{
+				".mp3", ".flac", ".wav", ".aac", ".m4a", ".ogg", ".opus", ".wma",
+				".ape", ".alac", ".aiff", ".aif", ".dsf", ".dff", ".wv", ".mka",
+			},
+			LyricExts: []string{".lrc", ".cue"},
+			ImageExts: []string{
+				".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp",
+				".heic", ".heif", ".avif", ".tif", ".tiff", ".svg",
+			},
 			ExcludeNames: []string{
 				".*", "$*", "System Volume Information", "@eaDir", "#recycle", "#snapshot",
 			},
@@ -274,11 +298,9 @@ func (c *Config) Normalize() error {
 		}
 	}
 
-	// 视频目录
-	if len(c.Dirs) == 0 {
-		errs = append(errs, errors.New("dirs 至少需要配置一个视频目录"))
-	}
+	// 媒体目录（允许初始为空，方便开箱启动后通过 Web 管理后台图形化添加）
 	seen := make(map[string]bool)
+	usedTypes := make(map[string]bool)
 	for i := range c.Dirs {
 		d := &c.Dirs[i]
 		d.Name = strings.TrimSpace(d.Name)
@@ -302,6 +324,17 @@ func (c *Config) Normalize() error {
 		}
 		seen[key] = true
 
+		// 规范化并校验目录文件类型（留空时向后兼容为 ["video"]）
+		normTypes, typeErr := NormalizeFileTypes(d.Types)
+		if typeErr != nil {
+			errs = append(errs, fmt.Errorf("dirs[%d].types 无效: %v", i, typeErr))
+		} else {
+			d.Types = normTypes
+			for _, t := range normTypes {
+				usedTypes[t] = true
+			}
+		}
+
 		if !filepath.IsAbs(d.Path) {
 			errs = append(errs, fmt.Errorf("dirs[%d].path 必须是绝对路径: %q", i, d.Path))
 			continue
@@ -320,9 +353,18 @@ func (c *Config) Normalize() error {
 	// 扩展名统一为小写并带点
 	c.Filter.VideoExts = normalizeExts(c.Filter.VideoExts)
 	c.Filter.SubtitleExts = normalizeExts(c.Filter.SubtitleExts)
+	c.Filter.AudioExts = normalizeExts(c.Filter.AudioExts)
+	c.Filter.LyricExts = normalizeExts(c.Filter.LyricExts)
+	c.Filter.ImageExts = normalizeExts(c.Filter.ImageExts)
 	c.Filter.ExtraExts = normalizeExts(c.Filter.ExtraExts)
-	if len(c.Filter.VideoExts) == 0 {
-		errs = append(errs, errors.New("filter.video_exts 不能为空"))
+	if usedTypes[FileTypeVideo] && len(c.Filter.VideoExts) == 0 {
+		errs = append(errs, errors.New("已启用视频类型目录，filter.video_exts 不能为空"))
+	}
+	if usedTypes[FileTypeAudio] && len(c.Filter.AudioExts) == 0 {
+		errs = append(errs, errors.New("已启用音频类型目录，filter.audio_exts 不能为空"))
+	}
+	if usedTypes[FileTypeImage] && len(c.Filter.ImageExts) == 0 {
+		errs = append(errs, errors.New("已启用图片类型目录，filter.image_exts 不能为空"))
 	}
 	for i, p := range c.Filter.ExcludeNames {
 		c.Filter.ExcludeNames[i] = strings.ToLower(strings.TrimSpace(p))
@@ -341,6 +383,72 @@ func (c *Config) Normalize() error {
 	c.Log.File = c.ResolvePath(c.Log.File)
 
 	return errors.Join(errs...)
+}
+
+// NormalizeFileTypes 规范化并校验目录的文件类型列表；为空时默认返回 ["video"] 以兼容旧配置。
+func NormalizeFileTypes(types []string) ([]string, error) {
+	if len(types) == 0 {
+		return []string{FileTypeVideo}, nil
+	}
+	out := make([]string, 0, len(types))
+	seen := make(map[string]bool)
+	for _, raw := range types {
+		t := strings.ToLower(strings.TrimSpace(raw))
+		if t == "" {
+			continue
+		}
+		switch t {
+		case FileTypeVideo, FileTypeAudio, FileTypeImage:
+			if !seen[t] {
+				seen[t] = true
+				out = append(out, t)
+			}
+		default:
+			return nil, fmt.Errorf("不支持的文件类型 %q（仅支持 video / audio / image）", raw)
+		}
+	}
+	if len(out) == 0 {
+		return []string{FileTypeVideo}, nil
+	}
+	return out, nil
+}
+
+// MatchExts 根据目录选择的文件类型，返回主媒体扩展名集合（用于隐藏空目录判断和扫描计数）
+// 以及全部允许暴露的扩展名集合（主媒体 + 对应伴随文件 + 全局 extra_exts）。
+func (f FilterConfig) MatchExts(types []string) (primary map[string]bool, allowed map[string]bool) {
+	primary = make(map[string]bool)
+	allowed = make(map[string]bool)
+
+	normTypes, err := NormalizeFileTypes(types)
+	if err != nil {
+		normTypes = []string{FileTypeVideo}
+	}
+
+	addAll := func(dst map[string]bool, exts []string) {
+		for _, e := range normalizeExts(exts) {
+			dst[e] = true
+		}
+	}
+
+	for _, t := range normTypes {
+		switch t {
+		case FileTypeVideo:
+			addAll(primary, f.VideoExts)
+			addAll(allowed, f.VideoExts)
+			addAll(allowed, f.SubtitleExts)
+		case FileTypeAudio:
+			addAll(primary, f.AudioExts)
+			addAll(allowed, f.AudioExts)
+			addAll(allowed, f.LyricExts)
+		case FileTypeImage:
+			addAll(primary, f.ImageExts)
+			addAll(allowed, f.ImageExts)
+		}
+	}
+
+	// 全局 extra_exts 作为伴随/元数据文件对所有目录生效
+	addAll(allowed, f.ExtraExts)
+	return primary, allowed
 }
 
 // normalizeExts 将扩展名转为小写、补全前导点并去重。

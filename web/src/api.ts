@@ -1,4 +1,4 @@
-import type { ServerStatus, BannedIP, AppConfig, TestPathResult } from './types'
+import type { ServerStatus, BannedIP, AppConfig, TestPathResult, FileType } from './types'
 
 const TOKEN_KEY = 'video_webdav_token'
 
@@ -84,11 +84,11 @@ export const api = {
       body: JSON.stringify(cfg),
     }),
 
-  // 路径测试
-  testPath: (path: string) =>
+  // 路径测试（按所选文件类型统计匹配文件）
+  testPath: (path: string, types: FileType[]) =>
     request<TestPathResult>('/api/admin/test-path', {
       method: 'POST',
-      body: JSON.stringify({ path }),
+      body: JSON.stringify({ path, types }),
     }),
 
   // 获取运行日志

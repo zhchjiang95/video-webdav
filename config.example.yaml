@@ -25,26 +25,45 @@ security:
   failure_window: 10m
   ban_duration: 30m
 
-# 视频目录，可配置多个。name 为在播放器里看到的文件夹名
+# 媒体目录，可配置多个。
+# name 为在客户端里看到的文件夹名；
+# types 为该目录只扫描的文件类型（可多选）：video（视频，自动含字幕）/ audio（音频，自动含歌词与 .cue）/ image（图片）
+# 省略 types 时默认仅扫描 ["video"]（兼容旧配置）
 dirs:
   - name: "电影"
     path: 'D:\Movies'
+    types: ["video"]
   - name: "剧集"
     path: 'E:\TV Shows'
+    types: ["video"]
+  - name: "音乐"
+    path: 'D:\Music'
+    types: ["audio"]
+  - name: "相册"
+    path: 'D:\Photos'
+    types: ["image"]
 
 filter:
-  # 视频扩展名（不区分大小写）
+  # 视频扩展名（不区分大小写，types 包含 video 时生效）
   video_exts: [".mkv", ".mp4", ".m4v", ".avi", ".mov", ".wmv", ".flv", ".f4v", ".webm",
                ".ts", ".m2ts", ".mts", ".mpg", ".mpeg", ".vob", ".rmvb", ".rm", ".3gp", ".iso"]
-  # 字幕扩展名
+  # 字幕扩展名（types 包含 video 时自动附带暴露，不作为空目录非空依据）
   subtitle_exts: [".srt", ".ass", ".ssa", ".sup", ".vtt", ".sub", ".idx"]
-  # 其它需要暴露的扩展名，例如想让播放器读取本地刮削结果可加上 [".nfo", ".jpg", ".png"]
+  # 音频扩展名（types 包含 audio 时生效）
+  audio_exts: [".mp3", ".flac", ".wav", ".aac", ".m4a", ".ogg", ".opus", ".wma",
+               ".ape", ".alac", ".aiff", ".aif", ".dsf", ".dff", ".wv", ".mka"]
+  # 歌词与分轨扩展名（types 包含 audio 时自动附带暴露，不作为空目录非空依据）
+  lyric_exts: [".lrc", ".cue"]
+  # 图片扩展名（types 包含 image 时生效）
+  image_exts: [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp",
+               ".heic", ".heif", ".avif", ".tif", ".tiff", ".svg"]
+  # 其它需要全局暴露的扩展名，例如想让播放器读取本地刮削结果可加上 [".nfo", ".jpg", ".png"]
   extra_exts: []
   # 隐藏的文件/目录名，支持通配符 * ?，不区分大小写
   exclude_names: [".*", "$*", "System Volume Information", "@eaDir", "#recycle", "#snapshot"]
-  # 隐藏不包含任何视频的目录（会递归检查子目录）
+  # 隐藏不包含任何所选类型主媒体文件的目录（会递归检查子目录）
   hide_empty_dirs: true
-  # 上述检查结果的缓存时间，新增视频后最多这么久才会让原本隐藏的目录出现
+  # 上述检查结果的缓存时间，新增文件后最多这么久才会让原本隐藏的目录出现
   empty_dir_cache_ttl: 2m
   # 是否跟随符号链接/目录联接(junction)。开启后链接可能指向配置目录之外，请确认安全后再开
   follow_symlinks: false

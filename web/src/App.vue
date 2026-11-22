@@ -20,9 +20,56 @@ import {
   Power,
   RefreshCw,
   Search,
+  Film,
+  Music,
+  Image as ImageIcon,
 } from 'lucide-vue-next'
 import { api, getToken, setToken } from './api'
-import type { ServerStatus, BannedIP, AppConfig, TestPathResult } from './types'
+import type { ServerStatus, BannedIP, AppConfig, TestPathResult, FileType, DirConfig } from './types'
+
+// 支持的目录文件类型元数据
+const FILE_TYPE_OPTIONS: {
+  value: FileType
+  label: string
+  desc: string
+  badgeClass: string
+  activeClass: string
+}[] = [
+  {
+    value: 'video',
+    label: '视频',
+    desc: '自动附带字幕文件',
+    badgeClass: 'bg-indigo-50 text-indigo-700 border-indigo-200',
+    activeClass: 'border-indigo-500 bg-indigo-50/70 text-indigo-900 ring-2 ring-indigo-500/20',
+  },
+  {
+    value: 'audio',
+    label: '音频',
+    desc: '自动附带歌词/分轨',
+    badgeClass: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    activeClass: 'border-emerald-500 bg-emerald-50/70 text-emerald-900 ring-2 ring-emerald-500/20',
+  },
+  {
+    value: 'image',
+    label: '图片',
+    desc: '常见图片与动图格式',
+    badgeClass: 'bg-amber-50 text-amber-700 border-amber-200',
+    activeClass: 'border-amber-500 bg-amber-50/70 text-amber-900 ring-2 ring-amber-500/20',
+  },
+]
+
+function getFileTypeOption(type: FileType) {
+  return FILE_TYPE_OPTIONS.find((o) => o.value === type) || FILE_TYPE_OPTIONS[0]
+}
+
+function getDirTypes(dir: DirConfig): FileType[] {
+  return dir.types && dir.types.length > 0 ? dir.types : ['video']
+}
+
+function formatTypeLabels(types?: FileType[]): string {
+  const list = types && types.length > 0 ? types : (['video'] as FileType[])
+  return list.map((t) => getFileTypeOption(t).label).join(' / ')
+}
 
 // 状态管理
 const token = ref(getToken())
@@ -86,9 +133,25 @@ const dirModal = reactive({
   editIndex: -1,
   name: '',
   path: '',
+  types: ['video'] as FileType[],
   testResult: null as TestPathResult | null,
   testing: false,
 })
+
+function toggleDirModalType(type: FileType) {
+  const idx = dirModal.types.indexOf(type)
+  if (idx >= 0) {
+    if (dirModal.types.length <= 1) {
+      showToast('至少需要选择一种文件类型', 'warn')
+      return
+    }
+    dirModal.types.splice(idx, 1)
+  } else {
+    dirModal.types.push(type)
+  }
+  // 切换文件类型后清除旧的路径检测结果，避免误导
+  dirModal.testResult = null
+}
 
 // 登录逻辑
 async function handleLogin() {
@@ -134,8 +197,22 @@ async function loadStatus() {
 async function loadConfig() {
   try {
     const res = await api.getConfig()
-    if (res && !Array.isArray(res.dirs)) {
-      res.dirs = []
+    if (res) {
+      if (!Array.isArray(res.dirs)) {
+        res.dirs = []
+      }
+      res.dirs = res.dirs.map((d) => ({
+        ...d,
+        types: Array.isArray(d.types) && d.types.length > 0 ? d.types : ['video'],
+      }))
+      if (res.filter) {
+        res.filter.video_exts = res.filter.video_exts || []
+        res.filter.subtitle_exts = res.filter.subtitle_exts || []
+        res.filter.audio_exts = res.filter.audio_exts || []
+        res.filter.lyric_exts = res.filter.lyric_exts || []
+        res.filter.image_exts = res.filter.image_exts || []
+        res.filter.extra_exts = res.filter.extra_exts || []
+      }
     }
     config.value = res
   } catch (err: any) {
@@ -162,6 +239,7 @@ function openAddDirModal() {
   dirModal.editIndex = -1
   dirModal.name = ''
   dirModal.path = ''
+  dirModal.types = ['video']
   dirModal.testResult = null
   dirModal.show = true
 }
@@ -173,6 +251,7 @@ function openEditDirModal(index: number) {
   dirModal.editIndex = index
   dirModal.name = item.name
   dirModal.path = item.path
+  dirModal.types = [...getDirTypes(item)]
   dirModal.testResult = null
   dirModal.show = true
 }
@@ -182,13 +261,17 @@ async function testCurrentPath() {
     showToast('请输入目录绝对路径', 'warn')
     return
   }
+  if (dirModal.types.length === 0) {
+    showToast('请至少选择一种文件类型', 'warn')
+    return
+  }
   dirModal.testing = true
   dirModal.testResult = null
   try {
-    const res = await api.testPath(dirModal.path.trim())
+    const res = await api.testPath(dirModal.path.trim(), [...dirModal.types])
     dirModal.testResult = res
   } catch (err: any) {
-    dirModal.testResult = { exists: false, is_dir: false, video_count: 0, error: err.message }
+    dirModal.testResult = { exists: false, is_dir: false, match_count: 0, error: err.message }
   } finally {
     dirModal.testing = false
   }
@@ -198,6 +281,7 @@ function saveDirModal() {
   if (!config.value) return
   const name = dirModal.name.trim()
   const path = dirModal.path.trim()
+  const types = [...dirModal.types]
   if (!name) {
     showToast('目录显示名称不能为空', 'warn')
     return
@@ -210,6 +294,10 @@ function saveDirModal() {
     showToast('本地绝对路径不能为空', 'warn')
     return
   }
+  if (types.length === 0) {
+    showToast('请至少选择一种文件类型', 'warn')
+    return
+  }
 
   // 检查名称重复
   const exists = config.value.dirs.some((d, idx) => idx !== dirModal.editIndex && d.name.toLowerCase() === name.toLowerCase())
@@ -219,9 +307,9 @@ function saveDirModal() {
   }
 
   if (dirModal.isEdit) {
-    config.value.dirs[dirModal.editIndex] = { name, path }
+    config.value.dirs[dirModal.editIndex] = { name, path, types }
   } else {
-    config.value.dirs.push({ name, path })
+    config.value.dirs.push({ name, path, types })
   }
   dirModal.show = false
   saveConfigData(true)
@@ -230,7 +318,7 @@ function saveDirModal() {
 function removeDir(index: number) {
   if (!config.value) return
   const item = config.value.dirs[index]
-  if (confirm(`确定要移除视频目录 "${item.name}" 吗？（不会删除磁盘文件）`)) {
+  if (confirm(`确定要移除媒体目录 "${item.name}" 吗？（不会删除磁盘文件）`)) {
     config.value.dirs.splice(index, 1)
     saveConfigData(true)
   }
@@ -452,7 +540,7 @@ onUnmounted(() => {
               :class="activeTab === 'dirs' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'"
             >
               <Folder class="w-3.5 h-3.5" />
-              <span>视频目录</span>
+              <span>媒体目录</span>
             </button>
             <button
               @click="activeTab = 'settings'"
@@ -511,7 +599,7 @@ onUnmounted(() => {
 
             <div class="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm flex items-center justify-between">
               <div>
-                <p class="text-xs font-medium text-slate-500">已配置视频目录</p>
+                <p class="text-xs font-medium text-slate-500">已配置媒体目录</p>
                 <p class="text-xl font-bold text-slate-900 mt-1">{{ safeDirsCount }} 个</p>
               </div>
               <div class="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
@@ -634,13 +722,13 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <!-- 2. 视频目录 Tab -->
+        <!-- 2. 媒体目录 Tab -->
         <div v-else-if="activeTab === 'dirs'" class="space-y-4">
           <div class="flex items-center justify-between">
             <div>
-              <h2 class="text-base font-bold text-slate-900">视频目录管理</h2>
+              <h2 class="text-base font-bold text-slate-900">媒体目录管理</h2>
               <p class="text-xs text-slate-500 mt-0.5">
-                每个目录在 WebDAV 根目录下显示为一个独立的文件夹，修改后点击保存立即生效。
+                每个目录在 WebDAV 根目录下显示为一个独立的文件夹，可按目录选择只扫描视频、音频或图片，修改后立即热生效。
               </p>
             </div>
             <button
@@ -648,11 +736,31 @@ onUnmounted(() => {
               class="inline-flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-medium shadow-sm transition"
             >
               <Plus class="w-4 h-4" />
-              <span>添加视频目录</span>
+              <span>添加媒体目录</span>
             </button>
           </div>
 
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div
+            v-if="safeDirsCount === 0"
+            class="bg-white rounded-2xl border border-dashed border-slate-300 p-10 text-center"
+          >
+            <div class="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center mx-auto mb-3">
+              <Folder class="w-6 h-6" />
+            </div>
+            <h3 class="text-sm font-bold text-slate-900">还没有配置任何媒体目录</h3>
+            <p class="text-xs text-slate-500 mt-1 max-w-md mx-auto">
+              点击下方按钮添加本地文件夹，可按目录选择只扫描视频、音频或图片，保存后立即热生效，无需重启服务。
+            </p>
+            <button
+              @click="openAddDirModal"
+              class="mt-4 inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-medium shadow-sm transition"
+            >
+              <Plus class="w-4 h-4" />
+              <span>立即添加媒体目录</span>
+            </button>
+          </div>
+
+          <div v-else class="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div
               v-for="(dir, idx) in config?.dirs || []"
               :key="idx"
@@ -660,11 +768,24 @@ onUnmounted(() => {
             >
               <div>
                 <div class="flex items-center justify-between">
-                  <div class="flex items-center gap-2">
+                  <div class="flex items-center gap-2 flex-wrap">
                     <div class="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold text-sm">
                       /
                     </div>
                     <span class="font-bold text-slate-900 text-base">{{ dir.name }}</span>
+                    <div class="flex items-center gap-1.5 flex-wrap">
+                      <span
+                        v-for="t in getDirTypes(dir)"
+                        :key="t"
+                        class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border"
+                        :class="getFileTypeOption(t).badgeClass"
+                      >
+                        <Film v-if="t === 'video'" class="w-3 h-3" />
+                        <Music v-else-if="t === 'audio'" class="w-3 h-3" />
+                        <ImageIcon v-else class="w-3 h-3" />
+                        <span>{{ getFileTypeOption(t).label }}</span>
+                      </span>
+                    </div>
                   </div>
                   <div class="flex items-center gap-1 opacity-80 group-hover:opacity-100 transition">
                     <button
@@ -823,7 +944,7 @@ onUnmounted(() => {
               <div class="flex items-center justify-between">
                 <div>
                   <label class="text-xs font-medium text-slate-700 block">自动隐藏空目录</label>
-                  <span class="text-[11px] text-slate-400">不包含任何视频文件的目录将对客户端不可见</span>
+                  <span class="text-[11px] text-slate-400">不包含任何所选类型主媒体文件的目录将对客户端不可见</span>
                 </div>
                 <input
                   v-model="config.filter.hide_empty_dirs"
@@ -843,11 +964,52 @@ onUnmounted(() => {
               </div>
 
               <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1">字幕文件扩展名 (以逗号分隔)</label>
+                <label class="block text-xs font-medium text-slate-600 mb-1">字幕文件扩展名 (视频类型自动附带，以逗号分隔)</label>
                 <input
                   :value="(config.filter.subtitle_exts || []).join(', ')"
                   @input="(e: any) => config!.filter.subtitle_exts = e.target.value.split(',').map((s: string) => s.trim()).filter(Boolean)"
                   type="text"
+                  class="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-mono"
+                />
+              </div>
+
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1">音频文件扩展名 (以逗号分隔)</label>
+                <input
+                  :value="(config.filter.audio_exts || []).join(', ')"
+                  @input="(e: any) => config!.filter.audio_exts = e.target.value.split(',').map((s: string) => s.trim()).filter(Boolean)"
+                  type="text"
+                  class="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-mono"
+                />
+              </div>
+
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1">歌词/分轨扩展名 (音频类型自动附带，以逗号分隔)</label>
+                <input
+                  :value="(config.filter.lyric_exts || []).join(', ')"
+                  @input="(e: any) => config!.filter.lyric_exts = e.target.value.split(',').map((s: string) => s.trim()).filter(Boolean)"
+                  type="text"
+                  class="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-mono"
+                />
+              </div>
+
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1">图片文件扩展名 (以逗号分隔)</label>
+                <input
+                  :value="(config.filter.image_exts || []).join(', ')"
+                  @input="(e: any) => config!.filter.image_exts = e.target.value.split(',').map((s: string) => s.trim()).filter(Boolean)"
+                  type="text"
+                  class="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-mono"
+                />
+              </div>
+
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1">全局额外暴露扩展名 (如 .nfo，对所有目录生效)</label>
+                <input
+                  :value="(config.filter.extra_exts || []).join(', ')"
+                  @input="(e: any) => config!.filter.extra_exts = e.target.value.split(',').map((s: string) => s.trim()).filter(Boolean)"
+                  type="text"
+                  placeholder="例如: .nfo, .jpg"
                   class="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-mono"
                 />
               </div>
@@ -952,30 +1114,64 @@ onUnmounted(() => {
       </main>
     </div>
 
-    <!-- 添加 / 编辑视频目录 Modal 弹窗 -->
+    <!-- 添加 / 编辑媒体目录 Modal 弹窗 -->
     <div
       v-if="dirModal.show"
       class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm"
     >
       <div class="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6 border border-slate-200">
         <h3 class="text-base font-bold text-slate-900 mb-1">
-          {{ dirModal.isEdit ? '编辑视频目录' : '添加新的视频目录' }}
+          {{ dirModal.isEdit ? '编辑媒体目录' : '添加新的媒体目录' }}
         </h3>
         <p class="text-xs text-slate-500 mb-4">
-          支持配置本地硬盘路径（如 D:\Movies）或局域网共享路径。
+          支持配置本地硬盘路径（如 D:\Movies、D:\Music）或局域网共享路径，并指定只扫描的文件类型。
         </p>
 
         <div class="space-y-4">
           <div>
             <label class="block text-xs font-medium text-slate-700 mb-1">
-              显示名称 <span class="text-slate-400">(在播放器 WebDAV 根目录下看到的文件夹名)</span>
+              显示名称 <span class="text-slate-400">(在客户端 WebDAV 根目录下看到的文件夹名)</span>
             </label>
             <input
               v-model="dirModal.name"
               type="text"
-              placeholder="例如: 电影、动漫、美剧"
+              placeholder="例如: 电影、无损音乐、家庭相册"
               class="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600"
             />
+          </div>
+
+          <div>
+            <label class="block text-xs font-medium text-slate-700 mb-1.5">
+              扫描的文件类型 <span class="text-slate-400">(可多选，仅扫描和暴露所选类型文件)</span>
+            </label>
+            <div class="grid grid-cols-3 gap-2.5">
+              <button
+                v-for="opt in FILE_TYPE_OPTIONS"
+                :key="opt.value"
+                type="button"
+                @click="toggleDirModalType(opt.value)"
+                class="flex flex-col items-start p-3 rounded-xl border text-left transition"
+                :class="
+                  dirModal.types.includes(opt.value)
+                    ? opt.activeClass
+                    : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50'
+                "
+              >
+                <div class="flex items-center justify-between w-full mb-1">
+                  <div class="flex items-center gap-1.5 font-semibold text-xs">
+                    <Film v-if="opt.value === 'video'" class="w-4 h-4" />
+                    <Music v-else-if="opt.value === 'audio'" class="w-4 h-4" />
+                    <ImageIcon v-else class="w-4 h-4" />
+                    <span>{{ opt.label }}</span>
+                  </div>
+                  <CheckCircle2
+                    v-if="dirModal.types.includes(opt.value)"
+                    class="w-3.5 h-3.5 flex-shrink-0"
+                  />
+                </div>
+                <span class="text-[11px] opacity-75 leading-tight">{{ opt.desc }}</span>
+              </button>
+            </div>
           </div>
 
           <div>
@@ -994,16 +1190,28 @@ onUnmounted(() => {
             <input
               v-model="dirModal.path"
               type="text"
-              placeholder="例如: D:\Movies 或 E:\TV"
+              placeholder="例如: D:\Movies 或 D:\Music"
               class="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600"
             />
           </div>
 
           <!-- 路径检测反馈 -->
           <div v-if="dirModal.testResult" class="p-3 rounded-xl text-xs" :class="dirModal.testResult.exists ? 'bg-emerald-50 border border-emerald-200 text-emerald-800' : 'bg-rose-50 border border-rose-200 text-rose-800'">
-            <div v-if="dirModal.testResult.exists" class="flex items-center gap-2">
-              <CheckCircle2 class="w-4 h-4 text-emerald-600 flex-shrink-0" />
-              <span>检测成功！该目录存在，且扫描到 <strong>{{ dirModal.testResult.video_count }}</strong> 个视频文件。</span>
+            <div v-if="dirModal.testResult.exists" class="space-y-1.5">
+              <div class="flex items-center gap-2">
+                <CheckCircle2 class="w-4 h-4 text-emerald-600 flex-shrink-0" />
+                <span>
+                  检测成功！按所选类型（{{ formatTypeLabels(dirModal.testResult.types || dirModal.types) }}）{{ dirModal.testResult.truncated ? '至少' : '' }}扫描到
+                  <strong>{{ dirModal.testResult.match_count ?? dirModal.testResult.video_count ?? 0 }}</strong> 个匹配文件。
+                </span>
+              </div>
+              <div
+                v-if="dirModal.testResult.sample_files && dirModal.testResult.sample_files.length > 0"
+                class="pl-6 text-[11px] text-emerald-700/90 font-mono truncate"
+                :title="dirModal.testResult.sample_files.join(' / ')"
+              >
+                示例：{{ dirModal.testResult.sample_files.slice(0, 3).join('、') }}
+              </div>
             </div>
             <div v-else class="flex items-center gap-2">
               <AlertCircle class="w-4 h-4 text-rose-600 flex-shrink-0" />

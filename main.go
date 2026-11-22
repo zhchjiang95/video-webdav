@@ -68,8 +68,12 @@ func main() {
 		}
 		fmt.Printf("配置文件校验通过: %s\n", cfgPath)
 		fmt.Printf("监听地址: %s  HTTPS: %v\n", cfg.Server.Listen, cfg.Server.TLS.Enabled)
-		for _, d := range cfg.Dirs {
-			fmt.Printf("  /%s  ->  %s\n", d.Name, d.Path)
+		if len(cfg.Dirs) == 0 {
+			fmt.Println("  (当前尚未配置媒体目录，启动后可在 Web 管理后台 /admin/ 中直接添加)")
+		} else {
+			for _, d := range cfg.Dirs {
+				fmt.Printf("  /%s  ->  %s  (类型: %s)\n", d.Name, d.Path, strings.Join(d.Types, ","))
+			}
 		}
 		printAdminURLs(cfg)
 	case "install":
