@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">WebDAV 媒体服务</string>
+    <string name="admin_title">Web 管理后台</string>
+    <string name="notification_channel_name">WebDAV 媒体服务</string>
+    <string name="notification_channel_desc">保持 WebDAV 媒体服务在后台稳定运行</string>
+    <string name="status_running">服务运行中</string>
+    <string name="status_stopped">服务未启动</string>
+    <string name="btn_start">启动服务</string>
+    <string name="btn_stop">停止服务</string>
+    <string name="btn_open_admin">打开 Web 管理后台</string>
+    <string name="btn_copy_url">复制地址</string>
+    <string name="btn_pick_folder">选择文件夹</string>
+    <string name="btn_grant_storage">立即授权</string>
+    <string name="btn_ignore_battery">忽略电池优化</string>
+</resources>

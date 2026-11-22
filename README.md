@@ -23,6 +23,9 @@
 │   ├── tlscert/               # 证书加载与热更新
 │   └── server/                # HTTP 服务组装、WebDAV、Web 管理 API 与动态代理
 ├── web/                       # 内置 Web 可视化管理后台前端工程 (Vue 3 + Vite + Tailwind CSS)
+├── android/                   # Android 原生 APK 外壳工程（支持系统文件夹选择器与前台服务保活）
+├── .github/workflows/         # GitHub Actions 云端自动构建 Android APK
+├── docs/配置说明.txt           # 通用纯文本配置说明（打包时同步到 dist/）
 ├── config.example.yaml        # 配置示例
 └── build.sh                   # 自动构建前端并交叉编译 Windows 版本
 ```
@@ -39,6 +42,25 @@ go mod tidy        # 首次编译前下载依赖
 构建完成后，`dist/` 目录已包含开箱即用的 HTTP 默认配置 `config.yaml`（默认账号 `admin` / 密码 `admin123456`，初始目录为空）与 Windows 通用的 `配置说明.txt`，可直接启动程序后打开 `http://localhost:8443/admin/` 修改密码并图形化添加媒体目录。
 
 如果 Windows 电脑是 ARM 架构，改用 `GOARCH=arm64 ./build.sh`。
+
+## 📱 Android 手机 / 平板支持（云端自动构建 APK）
+
+本项目内置了完整的 Android 工程（`android/`）与 GitHub Actions 工作流（`.github/workflows/build-android.yml`），可将旧安卓手机或平板变成便携只读 WebDAV 媒体服务器：
+
+- **零本机环境云端打包**：将代码推送到 GitHub（或在 GitHub 仓库的 **Actions → Build Android APK** 点击 **Run workflow**），云端会自动编译前端、交叉编译 `arm64-v8a` / `armeabi-v7a` Go 核心并输出可直接安装的 APK：
+  - `video-server-<版本>-arm64-v8a-release.apk`（推荐，绝大多数现代手机/平板，体积约 9~10MB）
+  - `video-server-<版本>-armeabi-v7a-release.apk`（老旧 32 位安卓设备）
+  - `video-server-<版本>-universal-release.apk`（全架构通用包）
+  - 打上 `v*` 标签推送时（如 `git tag v1.1.0 && git push --tags`），会自动创建 GitHub Release 并附带 APK 下载链接。
+- **自定义正式签名（可选）**：未配置 Secrets 时自动使用默认签名，下载后可直接安装；如需固定签名方便后续覆盖升级，可在 GitHub 仓库 `Settings → Secrets and variables → Actions` 配置以下 4 个 Secret：
+  - `ANDROID_KEYSTORE_BASE64`（`.jks/.keystore` 文件的 Base64 编码）
+  - `ANDROID_KEYSTORE_PASSWORD`
+  - `ANDROID_KEY_ALIAS`
+  - `ANDROID_KEY_PASSWORD`
+- **手机/平板端特性**：
+  - **系统文件夹选择器**：点击「选择文件夹」直接调用安卓系统文件选择器，自动识别内置存储与外置 SD 卡/U 盘路径，勾选视频/音频/图片类型后立即热生效。
+  - **后台保活防断流**：采用 Android 前台常驻服务 + `WakeLock` / `WifiLock`，并提供一键引导开启「所有文件访问权限」与「忽略电池优化」。
+  - **内置 Web 管理后台**：启动后可一键复制局域网 WebDAV 地址，并直接在 App 内打开 `/admin/` 修改密码、端口与扩展名过滤规则（默认账号 `admin`，默认密码 `admin123456`）。
 
 ## 部署到 Windows
 

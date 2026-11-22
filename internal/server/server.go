@@ -129,6 +129,26 @@ func (s *Server) HTTPHandler() http.Handler {
 	return s.http.Handler
 }
 
+// ReloadFromFile 重新读取磁盘上的配置文件并热更新认证守卫与 VFS 文件系统（不中断当前连接）。
+func (s *Server) ReloadFromFile() error {
+	if s.cfgPath == "" {
+		return nil
+	}
+	newCfg, err := config.Load(s.cfgPath)
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.cfg = newCfg
+	s.guard.Update(newCfg.Auth, newCfg.Security)
+	s.fsProxy.Update(vfs.New(newCfg, s.logger))
+	s.logger.Info("已从配置文件热重载媒体目录与规则", "dirs", len(newCfg.Dirs))
+	return nil
+}
+
 // Start 开始监听端口（同步返回端口占用等错误），请求处理在后台进行。
 func (s *Server) Start() error {
 	ln, err := net.Listen("tcp", s.cfg.Server.Listen)

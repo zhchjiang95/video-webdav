@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="brand_primary">#4F46E5</color>
+    <color name="brand_primary_dark">#3730A3</color>
+    <color name="brand_primary_soft">#EEF2FF</color>
+    <color name="surface_bg">#F8FAFC</color>
+    <color name="card_bg">#FFFFFF</color>
+    <color name="card_stroke">#E2E8F0</color>
+    <color name="text_primary">#0F172A</color>
+    <color name="text_secondary">#64748B</color>
+    <color name="status_running">#10B981</color>
+    <color name="status_stopped">#94A3B8</color>
+    <color name="warn_bg">#FFFBEB</color>
+    <color name="warn_stroke">#FDE68A</color>
+    <color name="warn_text">#92400E</color>
+    <color name="danger">#E11D48</color>
+    <color name="chip_video_bg">#EEF2FF</color>
+    <color name="chip_video_text">#4338CA</color>
+    <color name="chip_audio_bg">#ECFDF5</color>
+    <color name="chip_audio_text">#047857</color>
+    <color name="chip_image_bg">#FFFBEB</color>
+    <color name="chip_image_text">#B45309</color>
+</resources>

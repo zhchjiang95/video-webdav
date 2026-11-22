@@ -141,3 +141,54 @@ func TestAdminTestPathByTypes(t *testing.T) {
 	}
 }
 
+func TestReloadFromFileAndEnsureDefaultConfig(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "config.yaml")
+
+	// 1. 首次调用应生成默认 HTTP 配置，二次调用不覆盖
+	created, err := config.EnsureDefaultConfig(cfgPath)
+	if err != nil || !created {
+		t.Fatalf("首次生成默认配置失败: created=%v err=%v", created, err)
+	}
+	createdAgain, err := config.EnsureDefaultConfig(cfgPath)
+	if err != nil || createdAgain {
+		t.Fatalf("重复调用不应覆盖已有配置: created=%v err=%v", createdAgain, err)
+	}
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("加载默认配置失败: %v", err)
+	}
+	srv, err := server.New(cfg, cfgPath, slog.New(slog.NewTextHandler(os.Stdout, nil)))
+	if err != nil {
+		t.Fatalf("创建服务失败: %v", err)
+	}
+
+	// 2. 在磁盘修改配置新增音频目录后，验证 ReloadFromFile 热生效
+	audioDir := filepath.Join(tmp, "music")
+	if err := os.MkdirAll(audioDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(audioDir, "demo.flac"), []byte("audio-data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Dirs = []config.DirConfig{
+		{Name: "音乐", Path: audioDir, Types: []string{config.FileTypeAudio}},
+	}
+	if err := cfg.Save(cfgPath); err != nil {
+		t.Fatalf("保存更新配置失败: %v", err)
+	}
+	if err := srv.ReloadFromFile(); err != nil {
+		t.Fatalf("ReloadFromFile 失败: %v", err)
+	}
+
+	// 验证 WebDAV 立刻可以访问新热加载的音频文件
+	req := httptest.NewRequest(http.MethodGet, "/音乐/demo.flac", nil)
+	req.SetBasicAuth("admin", "admin123456")
+	rec := httptest.NewRecorder()
+	srv.HTTPHandler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || rec.Body.String() != "audio-data" {
+		t.Fatalf("热重载后读取音频文件失败: status=%d body=%q", rec.Code, rec.Body.String())
+	}
+}
+

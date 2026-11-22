@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.VideoServer" parent="Theme.Material3.Light.NoActionBar">
+        <item name="colorPrimary">@color/brand_primary</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorPrimaryContainer">@color/brand_primary_soft</item>
+        <item name="colorOnPrimaryContainer">@color/brand_primary_dark</item>
+        <item name="android:colorBackground">@color/surface_bg</item>
+        <item name="android:statusBarColor">@color/surface_bg</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

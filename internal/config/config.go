@@ -261,6 +261,29 @@ func (c *Config) Save(path string) error {
 	return nil
 }
 
+// EnsureDefaultConfig 若配置文件不存在，则在指定路径生成一份开箱即用的默认 HTTP 配置。
+// 已存在时不做任何修改，返回 created=false。
+func EnsureDefaultConfig(path string) (bool, error) {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return false, fmt.Errorf("解析配置文件路径失败: %w", err)
+	}
+	if _, err := os.Stat(absPath); err == nil {
+		return false, nil
+	} else if !os.IsNotExist(err) {
+		return false, fmt.Errorf("检查配置文件失败: %w", err)
+	}
+
+	cfg := Default()
+	cfg.Auth.Username = "admin"
+	cfg.Auth.Password = "admin123456"
+	cfg.Dirs = []DirConfig{}
+	if err := cfg.Save(absPath); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // ResolvePath 将相对路径解析为相对配置文件所在目录的绝对路径。
 func (c *Config) ResolvePath(p string) string {
 	if p == "" || filepath.IsAbs(p) {

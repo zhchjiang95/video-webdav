@@ -5,3 +5,9 @@ config.yaml
 *.exe
 .DS_Store
 web/node_modules/
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/app/src/main/jniLibs/
+release-apks/
